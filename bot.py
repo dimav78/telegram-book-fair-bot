@@ -284,8 +284,8 @@ async def handle_cashless_payment(query, context: ContextTypes.DEFAULT_TYPE) -> 
         await query.edit_message_text("❌ Ошибка: автор не найден")
         return
     
-    qr_code_url = author.get('QR_Code_URL', '').strip()
-    contact = author.get('Contact', '').strip()
+    qr_code_url = str(author.get('QR_Code_URL', '')).strip()
+    contact = str(author.get('Contact', '')).strip()
     author_name = author.get('Name', 'Неизвестный автор')
     
     # Create cart summary
