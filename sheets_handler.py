@@ -136,6 +136,15 @@ except Exception as e:
     print(f"Error type: {type(e)}")
     spreadsheet = None
 
+# --- Cache management ---
+def clear_all_caches():
+    """Clears all caches to force fresh data retrieval"""
+    global _cache, _all_products_cache, _all_products_cache_time
+    _cache.clear()
+    _all_products_cache = None
+    _all_products_cache_time = 0
+    print("All caches cleared")
+
 # --- Batch operations ---
 _all_products_cache = None
 _all_products_cache_time = 0

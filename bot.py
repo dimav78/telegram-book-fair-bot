@@ -38,6 +38,12 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     )
 
 
+async def refresh(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Clears all caches and forces fresh data from Google Sheets."""
+    sheets_handler.clear_all_caches()
+    await update.message.reply_text('🔄 Кэш очищен! Данные будут обновлены при следующем обращении к Google Таблицам.')
+
+
 # --- Callback Query Handler ---
 async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Handles callback queries from inline keyboards."""
@@ -486,6 +492,9 @@ def main() -> None:
     # --- Register Handlers ---
     # Register the /start command
     application.add_handler(CommandHandler("start", start))
+    
+    # Register the /refresh command
+    application.add_handler(CommandHandler("refresh", refresh))
     
     # Register the callback query handler for button presses
     application.add_handler(CallbackQueryHandler(button_handler))
