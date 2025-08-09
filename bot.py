@@ -89,7 +89,9 @@ async def show_products_by_author(query, context: ContextTypes.DEFAULT_TYPE, aut
     products = sheets_handler.get_products_by_author(author_id)
     
     if not products:
-        await query.edit_message_text("У этого автора пока нет доступных книг.")
+        keyboard = [[InlineKeyboardButton("⬅️ К авторам", callback_data='select_author')]]
+        reply_markup = InlineKeyboardMarkup(keyboard)
+        await query.edit_message_text("У этого автора пока нет доступных книг.", reply_markup=reply_markup)
         return
     
     keyboard = []
