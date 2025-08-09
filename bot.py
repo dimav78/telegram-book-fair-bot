@@ -1,12 +1,18 @@
 import logging
+import os
 import telegram
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import Application, CommandHandler, CallbackQueryHandler, ContextTypes
+from dotenv import load_dotenv
 
-# --- Import configuration ---
-from config import TELEGRAM_TOKEN
+# --- Load environment variables ---
+load_dotenv()
+
 # --- Import your sheets functions ---
 import sheets_handler
+
+# --- Get configuration from environment ---
+TELEGRAM_TOKEN = os.getenv('TELEGRAM_TOKEN')
 
 # --- Basic Logging Setup ---
 logging.basicConfig(

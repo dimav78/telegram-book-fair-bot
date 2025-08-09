@@ -14,7 +14,7 @@ Primary Libraries:
 python-telegram-bot: For interacting with the Telegram Bot API.
 gspread & google-auth: For connecting to and manipulating the Google Sheet.
 Database: Google Sheets
-Hosting Environment: Any server capable of running a persistent Python script (e.g., a small cloud VM or a local machine).
+Hosting Environment: PythonAnywhere (production deployment) - a cloud platform for Python web applications that provides persistent background tasks and easy deployment.
 IDE: PyCharm
 System Architecture
 The application follows a simple and effective three-tier architecture, designed for low-volume use and easy maintenance.
