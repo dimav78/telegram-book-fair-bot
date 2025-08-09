@@ -205,10 +205,22 @@ async def add_to_cart(query, context: ContextTypes.DEFAULT_TYPE, product_id: int
         ]
         reply_markup = InlineKeyboardMarkup(keyboard)
         
-        await query.edit_message_text(
-            f"✅ '{title}' добавлена в корзину!\n\nЧто делаем дальше?",
-            reply_markup=reply_markup
-        )
+        # Try to edit message text, if it fails (media message), send new message
+        try:
+            await query.edit_message_text(
+                f"✅ '{title}' добавлена в корзину!\n\nЧто делаем дальше?",
+                reply_markup=reply_markup
+            )
+        except telegram.error.BadRequest as e:
+            if "no text in the message to edit" in str(e).lower():
+                # Previous message was media, delete and send new text message
+                await query.message.delete()
+                await query.message.reply_text(
+                    f"✅ '{title}' добавлена в корзину!\n\nЧто делаем дальше?",
+                    reply_markup=reply_markup
+                )
+            else:
+                raise e
     else:
         await query.answer("❌ Ошибка при добавлении в корзину")
 
