@@ -439,10 +439,22 @@ async def confirm_payment(query, context: ContextTypes.DEFAULT_TYPE, payment_met
     ]
     reply_markup = InlineKeyboardMarkup(keyboard)
     
-    await query.edit_message_text(
-        result_message,
-        reply_markup=reply_markup
-    )
+    # Try to edit message text, if it fails (media message), delete and send new message
+    try:
+        await query.edit_message_text(
+            result_message,
+            reply_markup=reply_markup
+        )
+    except telegram.error.BadRequest as e:
+        if "no text in the message to edit" in str(e).lower():
+            # Previous message was media, delete and send new text message
+            await query.message.delete()
+            await query.message.reply_text(
+                result_message,
+                reply_markup=reply_markup
+            )
+        else:
+            raise e
 
 
 async def show_totals(query, context: ContextTypes.DEFAULT_TYPE) -> None:
