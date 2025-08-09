@@ -97,7 +97,15 @@ async def show_authors(query, context: ContextTypes.DEFAULT_TYPE) -> None:
     keyboard.append([InlineKeyboardButton("⬅️ Назад", callback_data='back_to_main')])
     
     reply_markup = InlineKeyboardMarkup(keyboard)
-    await query.edit_message_text('Выберите автора:', reply_markup=reply_markup)
+    
+    try:
+        await query.edit_message_text('Выберите автора:', reply_markup=reply_markup)
+    except telegram.error.BadRequest as e:
+        if "no text in the message to edit" in str(e).lower():
+            await query.message.delete()
+            await query.message.reply_text('Выберите автора:', reply_markup=reply_markup)
+        else:
+            raise e
 
 
 async def show_products_by_author(query, context: ContextTypes.DEFAULT_TYPE, author_id: int) -> None:
@@ -120,7 +128,15 @@ async def show_products_by_author(query, context: ContextTypes.DEFAULT_TYPE, aut
     keyboard.append([InlineKeyboardButton("⬅️ К авторам", callback_data='select_author')])
     
     reply_markup = InlineKeyboardMarkup(keyboard)
-    await query.edit_message_text('Выберите книгу:', reply_markup=reply_markup)
+    
+    try:
+        await query.edit_message_text('Выберите книгу:', reply_markup=reply_markup)
+    except telegram.error.BadRequest as e:
+        if "no text in the message to edit" in str(e).lower():
+            await query.message.delete()
+            await query.message.reply_text('Выберите книгу:', reply_markup=reply_markup)
+        else:
+            raise e
 
 
 async def show_product_details(query, context: ContextTypes.DEFAULT_TYPE, product_id: int) -> None:
@@ -260,7 +276,14 @@ async def show_cart(query, context: ContextTypes.DEFAULT_TYPE) -> None:
     ]
     reply_markup = InlineKeyboardMarkup(keyboard)
     
-    await query.edit_message_text('\n'.join(message_lines), parse_mode='Markdown', reply_markup=reply_markup)
+    try:
+        await query.edit_message_text('\n'.join(message_lines), parse_mode='Markdown', reply_markup=reply_markup)
+    except telegram.error.BadRequest as e:
+        if "no text in the message to edit" in str(e).lower():
+            await query.message.delete()
+            await query.message.reply_text('\n'.join(message_lines), parse_mode='Markdown', reply_markup=reply_markup)
+        else:
+            raise e
 
 
 async def handle_cashless_payment(query, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -325,18 +348,40 @@ async def handle_cashless_payment(query, context: ContextTypes.DEFAULT_TYPE) -> 
             )
         elif contact:
             # Display contact info only
-            await query.edit_message_text(
-                text=message_text + f"\n\n📞 Контакт для оплаты: {contact}",
-                parse_mode='Markdown',
-                reply_markup=reply_markup
-            )
+            try:
+                await query.edit_message_text(
+                    text=message_text + f"\n\n📞 Контакт для оплаты: {contact}",
+                    parse_mode='Markdown',
+                    reply_markup=reply_markup
+                )
+            except telegram.error.BadRequest as e:
+                if "no text in the message to edit" in str(e).lower():
+                    await query.message.delete()
+                    await query.message.reply_text(
+                        text=message_text + f"\n\n📞 Контакт для оплаты: {contact}",
+                        parse_mode='Markdown',
+                        reply_markup=reply_markup
+                    )
+                else:
+                    raise e
         else:
             # No payment info available
-            await query.edit_message_text(
-                text=message_text + "\n\n❌ Нет информации для оплаты",
-                parse_mode='Markdown',
-                reply_markup=reply_markup
-            )
+            try:
+                await query.edit_message_text(
+                    text=message_text + "\n\n❌ Нет информации для оплаты",
+                    parse_mode='Markdown',
+                    reply_markup=reply_markup
+                )
+            except telegram.error.BadRequest as e:
+                if "no text in the message to edit" in str(e).lower():
+                    await query.message.delete()
+                    await query.message.reply_text(
+                        text=message_text + "\n\n❌ Нет информации для оплаты",
+                        parse_mode='Markdown',
+                        reply_markup=reply_markup
+                    )
+                else:
+                    raise e
     except Exception as e:
         logger.error(f"Error displaying cashless payment: {e}")
         # Fallback to text only
@@ -346,11 +391,22 @@ async def handle_cashless_payment(query, context: ContextTypes.DEFAULT_TYPE) -> 
         else:
             fallback_text += "\n\n❌ Нет информации для оплаты"
         
-        await query.edit_message_text(
-            text=fallback_text,
-            parse_mode='Markdown',
-            reply_markup=reply_markup
-        )
+        try:
+            await query.edit_message_text(
+                text=fallback_text,
+                parse_mode='Markdown',
+                reply_markup=reply_markup
+            )
+        except telegram.error.BadRequest as e:
+            if "no text in the message to edit" in str(e).lower():
+                await query.message.delete()
+                await query.message.reply_text(
+                    text=fallback_text,
+                    parse_mode='Markdown',
+                    reply_markup=reply_markup
+                )
+            else:
+                raise e
 
 
 async def handle_cash_payment(query, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -380,11 +436,22 @@ async def handle_cash_payment(query, context: ContextTypes.DEFAULT_TYPE) -> None
     ]
     reply_markup = InlineKeyboardMarkup(keyboard)
     
-    await query.edit_message_text(
-        text=message_text + "\n\n💵 Примите оплату наличными",
-        parse_mode='Markdown',
-        reply_markup=reply_markup
-    )
+    try:
+        await query.edit_message_text(
+            text=message_text + "\n\n💵 Примите оплату наличными",
+            parse_mode='Markdown',
+            reply_markup=reply_markup
+        )
+    except telegram.error.BadRequest as e:
+        if "no text in the message to edit" in str(e).lower():
+            await query.message.delete()
+            await query.message.reply_text(
+                text=message_text + "\n\n💵 Примите оплату наличными",
+                parse_mode='Markdown',
+                reply_markup=reply_markup
+            )
+        else:
+            raise e
 
 
 async def clear_cart(query, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -397,10 +464,20 @@ async def clear_cart(query, context: ContextTypes.DEFAULT_TYPE) -> None:
     ]
     reply_markup = InlineKeyboardMarkup(keyboard)
     
-    await query.edit_message_text(
-        "🗑 Корзина очищена",
-        reply_markup=reply_markup
-    )
+    try:
+        await query.edit_message_text(
+            "🗑 Корзина очищена",
+            reply_markup=reply_markup
+        )
+    except telegram.error.BadRequest as e:
+        if "no text in the message to edit" in str(e).lower():
+            await query.message.delete()
+            await query.message.reply_text(
+                "🗑 Корзина очищена",
+                reply_markup=reply_markup
+            )
+        else:
+            raise e
 
 
 async def confirm_payment(query, context: ContextTypes.DEFAULT_TYPE, payment_method: str) -> None:
@@ -477,10 +554,20 @@ async def handle_back_to_main(query, context: ContextTypes.DEFAULT_TYPE) -> None
     ]
     reply_markup = InlineKeyboardMarkup(keyboard)
     
-    await query.edit_message_text(
-        'Добро пожаловать в кассу книжной ярмарки! Выберите действие:',
-        reply_markup=reply_markup
-    )
+    try:
+        await query.edit_message_text(
+            'Добро пожаловать в кассу книжной ярмарки! Выберите действие:',
+            reply_markup=reply_markup
+        )
+    except telegram.error.BadRequest as e:
+        if "no text in the message to edit" in str(e).lower():
+            await query.message.delete()
+            await query.message.reply_text(
+                'Добро пожаловать в кассу книжной ярмарки! Выберите действие:',
+                reply_markup=reply_markup
+            )
+        else:
+            raise e
 
 
 # --- Main Bot Logic ---
