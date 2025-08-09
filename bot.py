@@ -59,6 +59,16 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
         await show_cart(query, context)
     elif query.data == 'view_totals':
         await show_totals(query, context)
+    elif query.data == 'payment_cashless':
+        await handle_cashless_payment(query, context)
+    elif query.data == 'payment_cash':
+        await handle_cash_payment(query, context)
+    elif query.data == 'clear_cart':
+        await clear_cart(query, context)
+    elif query.data == 'confirm_cashless':
+        await confirm_payment(query, context, 'cashless')
+    elif query.data == 'confirm_cash':
+        await confirm_payment(query, context, 'cash')
     elif query.data == 'back_to_main':
         await handle_back_to_main(query, context)
 
@@ -233,6 +243,194 @@ async def show_cart(query, context: ContextTypes.DEFAULT_TYPE) -> None:
     reply_markup = InlineKeyboardMarkup(keyboard)
     
     await query.edit_message_text('\n'.join(message_lines), parse_mode='Markdown', reply_markup=reply_markup)
+
+
+async def handle_cashless_payment(query, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Handles cashless payment with QR code or contact display."""
+    cart = context.user_data.get('cart', [])
+    
+    if not cart:
+        await query.answer("❌ Корзина пуста")
+        return
+    
+    # Calculate total and get author info
+    total = sum(product.get('Price', 0) for product in cart)
+    
+    # Get author info from first product (assuming single author per transaction)
+    first_product = cart[0]
+    author_id = first_product.get('AuthorID')
+    
+    # Find author details
+    authors = sheets_handler.get_authors()
+    author = None
+    for a in authors:
+        if a.get('AuthorID') == author_id:
+            author = a
+            break
+    
+    if not author:
+        await query.edit_message_text("❌ Ошибка: автор не найден")
+        return
+    
+    qr_code_url = author.get('QR_Code_URL', '').strip()
+    contact = author.get('Contact', '').strip()
+    author_name = author.get('Name', 'Неизвестный автор')
+    
+    # Create cart summary
+    cart_lines = [f"💳 *Безналичная оплата*\n"]
+    cart_lines.append(f"👤 Автор: {author_name}")
+    cart_lines.append(f"💰 Сумма: {total} руб.\n")
+    
+    for i, product in enumerate(cart, 1):
+        title = product.get('Title', 'Без названия')
+        price = product.get('Price', 0)
+        cart_lines.append(f"{i}. {title} - {price} руб.")
+    
+    message_text = '\n'.join(cart_lines)
+    
+    keyboard = [
+        [InlineKeyboardButton("✅ Подтвердить оплату", callback_data='confirm_cashless')],
+        [InlineKeyboardButton("⬅️ Назад к корзине", callback_data='view_cart')]
+    ]
+    reply_markup = InlineKeyboardMarkup(keyboard)
+    
+    try:
+        if qr_code_url:
+            # Display QR code image
+            await query.edit_message_media(
+                media=telegram.InputMediaPhoto(
+                    media=qr_code_url, 
+                    caption=message_text + f"\n\n📱 Отсканируйте QR-код для оплаты",
+                    parse_mode='Markdown'
+                ),
+                reply_markup=reply_markup
+            )
+        elif contact:
+            # Display contact info only
+            await query.edit_message_text(
+                text=message_text + f"\n\n📞 Контакт для оплаты: {contact}",
+                parse_mode='Markdown',
+                reply_markup=reply_markup
+            )
+        else:
+            # No payment info available
+            await query.edit_message_text(
+                text=message_text + "\n\n❌ Нет информации для оплаты",
+                parse_mode='Markdown',
+                reply_markup=reply_markup
+            )
+    except Exception as e:
+        logger.error(f"Error displaying cashless payment: {e}")
+        # Fallback to text only
+        fallback_text = message_text
+        if contact:
+            fallback_text += f"\n\n📞 Контакт для оплаты: {contact}"
+        else:
+            fallback_text += "\n\n❌ Нет информации для оплаты"
+        
+        await query.edit_message_text(
+            text=fallback_text,
+            parse_mode='Markdown',
+            reply_markup=reply_markup
+        )
+
+
+async def handle_cash_payment(query, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Handles cash payment."""
+    cart = context.user_data.get('cart', [])
+    
+    if not cart:
+        await query.answer("❌ Корзина пуста")
+        return
+    
+    total = sum(product.get('Price', 0) for product in cart)
+    
+    # Create cart summary
+    cart_lines = [f"💵 *Оплата наличными*\n"]
+    cart_lines.append(f"💰 Сумма: {total} руб.\n")
+    
+    for i, product in enumerate(cart, 1):
+        title = product.get('Title', 'Без названия')
+        price = product.get('Price', 0)
+        cart_lines.append(f"{i}. {title} - {price} руб.")
+    
+    message_text = '\n'.join(cart_lines)
+    
+    keyboard = [
+        [InlineKeyboardButton("✅ Подтвердить оплату", callback_data='confirm_cash')],
+        [InlineKeyboardButton("⬅️ Назад к корзине", callback_data='view_cart')]
+    ]
+    reply_markup = InlineKeyboardMarkup(keyboard)
+    
+    await query.edit_message_text(
+        text=message_text + "\n\n💵 Примите оплату наличными",
+        parse_mode='Markdown',
+        reply_markup=reply_markup
+    )
+
+
+async def clear_cart(query, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Clears the user's cart."""
+    context.user_data['cart'] = []
+    
+    keyboard = [
+        [InlineKeyboardButton("➕ Добавить книги", callback_data='select_author')],
+        [InlineKeyboardButton("🏠 Главное меню", callback_data='back_to_main')]
+    ]
+    reply_markup = InlineKeyboardMarkup(keyboard)
+    
+    await query.edit_message_text(
+        "🗑 Корзина очищена",
+        reply_markup=reply_markup
+    )
+
+
+async def confirm_payment(query, context: ContextTypes.DEFAULT_TYPE, payment_method: str) -> None:
+    """Confirms payment and records transactions."""
+    cart = context.user_data.get('cart', [])
+    
+    if not cart:
+        await query.answer("❌ Корзина пуста")
+        return
+    
+    # Record each product as a separate transaction
+    successful_transactions = 0
+    failed_transactions = 0
+    
+    for product in cart:
+        product_id = product.get('ProductID')
+        author_id = product.get('AuthorID')
+        price = product.get('Price', 0)
+        
+        success = sheets_handler.record_transaction(product_id, author_id, payment_method, price)
+        if success:
+            successful_transactions += 1
+        else:
+            failed_transactions += 1
+    
+    # Clear cart after recording transactions
+    context.user_data['cart'] = []
+    
+    # Prepare result message
+    total_amount = sum(product.get('Price', 0) for product in cart)
+    payment_emoji = "💳" if payment_method == "cashless" else "💵"
+    payment_text = "безналичная" if payment_method == "cashless" else "наличными"
+    
+    if failed_transactions == 0:
+        result_message = f"✅ Оплата успешно завершена!\n\n{payment_emoji} {payment_text.capitalize()}: {total_amount} руб.\n📝 Записано транзакций: {successful_transactions}"
+    else:
+        result_message = f"⚠️ Оплата завершена с ошибками!\n\n{payment_emoji} {payment_text.capitalize()}: {total_amount} руб.\n✅ Успешно: {successful_transactions}\n❌ Ошибок: {failed_transactions}"
+    
+    keyboard = [
+        [InlineKeyboardButton("➕ Новая продажа", callback_data='select_author')],
+        [InlineKeyboardButton("🏠 Главное меню", callback_data='back_to_main')]
+    ]
+    reply_markup = InlineKeyboardMarkup(keyboard)
+    
+    await query.edit_message_text(
+        result_message,
+        reply_markup=reply_markup
+    )
 
 
 async def show_totals(query, context: ContextTypes.DEFAULT_TYPE) -> None:
