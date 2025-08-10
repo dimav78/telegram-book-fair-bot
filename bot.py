@@ -265,7 +265,13 @@ async def show_product_details(query, context: ContextTypes.DEFAULT_TYPE, produc
             author_name = author.get('Name', 'Неизвестный автор')
             break
     
-    message_text = f"📚 *{title}*\n\n👤 Автор: {author_name}\n💰 Цена: {price} руб.\n\n📝 {description}"
+    # Check if product is part of the "3 for 2" promotion
+    promotion_text = ""
+    promotion_type = product.get('Promotion', '').strip().lower()
+    if promotion_type == '3for2':
+        promotion_text = "\n🎉 *Участвует в акции «3 за 2»!*"
+    
+    message_text = f"📚 *{title}*\n\n👤 Автор: {author_name}\n💰 Цена: {price} руб.{promotion_text}\n\n📝 {description}"
     
     keyboard = [
         [InlineKeyboardButton("🛒 Добавить в корзину", callback_data=f'add_to_cart_{product_id}')],
@@ -371,22 +377,42 @@ async def show_cart(query, context: ContextTypes.DEFAULT_TYPE) -> None:
         await query.edit_message_text("🛒 Ваша корзина пуста", reply_markup=reply_markup)
         return
     
+    # Calculate totals with promotions
+    original_total = sum(product.get('Price', 0) for product in cart)
+    final_total, promotion_discounts = calculate_cart_with_promotions(cart)
+    
     message_lines = ["🛒 *Ваша корзина:*\n"]
-    total = 0
+    
+    # Create a map of products that get promotion discounts for display
+    promo_discount_map = {}
+    for discount_info in promotion_discounts:
+        product_id = discount_info['product'].get('ProductID')
+        promo_discount_map[product_id] = discount_info
     
     for i, product in enumerate(cart, 1):
         title = product.get('Title', 'Без названия')
         price = product.get('Price', 0)
-        total += price
+        product_id = product.get('ProductID')
         
-        # Check if discount was applied
+        # Check for existing discount (monetary)
         if product.get('DiscountApplied', 0) > 0:
             discount_amount = product.get('DiscountApplied', 0)
             message_lines.append(f"{i}. {title} - {price} руб. (скидка {int(discount_amount)} руб.)")
+        # Check for promotion discount
+        elif product_id in promo_discount_map:
+            promo_info = promo_discount_map[product_id]
+            message_lines.append(f"{i}. {title} - {price} руб. → БЕСПЛАТНО ({promo_info['reason']})")
         else:
             message_lines.append(f"{i}. {title} - {price} руб.")
     
-    message_lines.append(f"\n💰 *Общая сумма: {total} руб.*")
+    # Show promotion savings if any
+    if original_total != final_total:
+        savings = original_total - final_total
+        message_lines.append(f"\n💰 К доплате: {original_total} руб.")
+        message_lines.append(f"🎉 Экономия по акции «3 за 2»: {savings} руб.")
+        message_lines.append(f"💵 *Итого к оплате: {final_total} руб.*")
+    else:
+        message_lines.append(f"\n💰 *Общая сумма: {final_total} руб.*")
     
     keyboard = [
         [InlineKeyboardButton("💳 Безнал", callback_data='payment_cashless'),
@@ -414,8 +440,9 @@ async def handle_cashless_payment(query, context: ContextTypes.DEFAULT_TYPE) -> 
         await query.answer("❌ Корзина пуста")
         return
     
-    # Calculate total and get author info
-    total = sum(product.get('Price', 0) for product in cart)
+    # Calculate total with promotions and get author info
+    original_total = sum(product.get('Price', 0) for product in cart)
+    total, promotion_discounts = calculate_cart_with_promotions(cart)
     
     # Get author info from first product (assuming single author per transaction)
     first_product = cart[0]
@@ -541,7 +568,8 @@ async def handle_cash_payment(query, context: ContextTypes.DEFAULT_TYPE) -> None
         await query.answer("❌ Корзина пуста")
         return
     
-    total = sum(product.get('Price', 0) for product in cart)
+    original_total = sum(product.get('Price', 0) for product in cart)
+    total, promotion_discounts = calculate_cart_with_promotions(cart)
     
     # Create cart summary
     cart_lines = [f"💵 *Оплата наличными*\n"]
@@ -582,6 +610,58 @@ async def handle_cash_payment(query, context: ContextTypes.DEFAULT_TYPE) -> None
             raise e
 
 
+def calculate_cart_with_promotions(cart):
+    """Calculate cart total with '3 for the price of 2' promotion based on Google Sheets data."""
+    if not cart:
+        return 0, []
+    
+    # Separate promotion products from regular products based on Promotion column
+    promotion_products = []
+    regular_products = []
+    
+    for product in cart:
+        promotion_type = product.get('Promotion', '').strip().lower()
+        if promotion_type == '3for2':
+            promotion_products.append(product)
+        else:
+            regular_products.append(product)
+    
+    # Calculate regular products total (includes existing discount logic)
+    regular_total = sum(product.get('Price', 0) for product in regular_products)
+    
+    # Calculate promotion products with "3 for 2" logic
+    promotion_total = 0
+    promotion_discounts = []
+    
+    if promotion_products:
+        # Sort promotion products by price (descending) to identify cheapest in each group of 3
+        sorted_promo = sorted(promotion_products, key=lambda p: p.get('Price', 0), reverse=True)
+        
+        for i in range(0, len(sorted_promo), 3):
+            group = sorted_promo[i:i+3]
+            
+            if len(group) == 3:
+                # Full group of 3: pay for 2, cheapest is free
+                group_prices = [p.get('Price', 0) for p in group]
+                cheapest_price = min(group_prices)
+                group_total = sum(group_prices) - cheapest_price
+                promotion_total += group_total
+                
+                # Track which product gets the discount
+                cheapest_product = min(group, key=lambda p: p.get('Price', 0))
+                promotion_discounts.append({
+                    'product': cheapest_product,
+                    'discount_amount': cheapest_price,
+                    'reason': '3 за 2'
+                })
+            else:
+                # Incomplete group: pay full price
+                promotion_total += sum(p.get('Price', 0) for p in group)
+    
+    total = regular_total + promotion_total
+    return total, promotion_discounts
+
+
 async def clear_cart(query, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Clears the user's cart."""
     context.user_data['cart'] = []
@@ -616,6 +696,15 @@ async def confirm_payment(query, context: ContextTypes.DEFAULT_TYPE, payment_met
         await query.answer("❌ Корзина пуста")
         return
     
+    # Calculate final prices with promotions
+    total_amount, promotion_discounts = calculate_cart_with_promotions(cart)
+    
+    # Create a map of promotion discounts for transaction recording
+    promo_discount_map = {}
+    for discount_info in promotion_discounts:
+        product_id = discount_info['product'].get('ProductID')
+        promo_discount_map[product_id] = discount_info
+    
     # Record each product as a separate transaction
     successful_transactions = 0
     failed_transactions = 0
@@ -623,7 +712,14 @@ async def confirm_payment(query, context: ContextTypes.DEFAULT_TYPE, payment_met
     for product in cart:
         product_id = product.get('ProductID')
         author_id = product.get('AuthorID')
-        price = product.get('Price', 0)
+        
+        # Use promotion-adjusted price if applicable
+        if product_id in promo_discount_map:
+            # Product is free due to "3 for 2" promotion
+            price = 0
+        else:
+            # Use original price (which may already include monetary discounts)
+            price = product.get('Price', 0)
         
         success = sheets_handler.record_transaction(product_id, author_id, payment_method, price)
         if success:
@@ -635,7 +731,6 @@ async def confirm_payment(query, context: ContextTypes.DEFAULT_TYPE, payment_met
     context.user_data['cart'] = []
     
     # Prepare result message
-    total_amount = sum(product.get('Price', 0) for product in cart)
     payment_emoji = "💳" if payment_method == "cashless" else "💵"
     payment_text = "безналичная" if payment_method == "cashless" else "наличными"
     
