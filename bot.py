@@ -27,6 +27,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Sends a welcome message when the /start command is issued."""
     keyboard = [
         [InlineKeyboardButton("Выбор по автору", callback_data='select_author')],
+        [InlineKeyboardButton("Выбор по продукту", callback_data='select_product')],
         [InlineKeyboardButton("Корзина", callback_data='view_cart')],
         [InlineKeyboardButton("Итоги", callback_data='view_totals')],
     ]
@@ -52,6 +53,11 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
     
     if query.data == 'select_author':
         await show_authors(query, context)
+    elif query.data == 'select_product':
+        await show_product_types(query, context)
+    elif query.data.startswith('product_type_'):
+        product_type = query.data.split('_')[2]
+        await show_products_by_type(query, context, product_type)
     elif query.data.startswith('author_'):
         author_id = int(query.data.split('_')[1])
         await show_products_by_author(query, context, author_id)
@@ -77,6 +83,88 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
         await confirm_payment(query, context, 'cash')
     elif query.data == 'back_to_main':
         await handle_back_to_main(query, context)
+    elif query.data.startswith('products_page_'):
+        parts = query.data.split('_')
+        product_type = parts[2]
+        page = int(parts[3])
+        await show_products_by_type(query, context, product_type, page)
+
+
+async def show_product_types(query, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Shows product type selection (Мерч/Книги)."""
+    keyboard = [
+        [InlineKeyboardButton("📚 Книги", callback_data='product_type_Книги')],
+        [InlineKeyboardButton("🛍 Мерч", callback_data='product_type_Мерч')],
+        [InlineKeyboardButton("⬅️ Назад", callback_data='back_to_main')]
+    ]
+    reply_markup = InlineKeyboardMarkup(keyboard)
+    
+    try:
+        await query.edit_message_text('Выберите тип продукта:', reply_markup=reply_markup)
+    except telegram.error.BadRequest as e:
+        if "no text in the message to edit" in str(e).lower():
+            await query.message.delete()
+            await query.message.reply_text('Выберите тип продукта:', reply_markup=reply_markup)
+        else:
+            raise e
+
+
+async def show_products_by_type(query, context: ContextTypes.DEFAULT_TYPE, product_type: str, page: int = 0) -> None:
+    """Shows products by selected type with pagination."""
+    # Get all products of the specific type
+    all_products = sheets_handler.get_all_products()
+    products = [p for p in all_products if p.get('ProductType', '').strip() == product_type]
+    
+    if not products:
+        keyboard = [[InlineKeyboardButton("⬅️ К типам продуктов", callback_data='select_product')]]
+        reply_markup = InlineKeyboardMarkup(keyboard)
+        await query.edit_message_text(f"Продукты типа '{product_type}' не найдены.", reply_markup=reply_markup)
+        return
+    
+    # Pagination settings
+    items_per_page = 10
+    start_idx = page * items_per_page
+    end_idx = start_idx + items_per_page
+    page_products = products[start_idx:end_idx]
+    
+    keyboard = []
+    for product in page_products:
+        product_title = product.get('Title', 'Без названия')
+        product_id = product.get('ProductID')
+        # Truncate title if too long for button
+        if len(product_title) > 30:
+            product_title = product_title[:27] + "..."
+        keyboard.append([InlineKeyboardButton(product_title, callback_data=f'product_{product_id}')])
+    
+    # Add pagination buttons if needed
+    pagination_row = []
+    if page > 0:
+        pagination_row.append(InlineKeyboardButton("⬅️ Пред.", callback_data=f'products_page_{product_type}_{page-1}'))
+    if end_idx < len(products):
+        pagination_row.append(InlineKeyboardButton("След. ➡️", callback_data=f'products_page_{product_type}_{page+1}'))
+    
+    if pagination_row:
+        keyboard.append(pagination_row)
+    
+    # Add back button
+    keyboard.append([InlineKeyboardButton("⬅️ К типам продуктов", callback_data='select_product')])
+    
+    reply_markup = InlineKeyboardMarkup(keyboard)
+    
+    # Create message text with pagination info
+    total_products = len(products)
+    showing_from = start_idx + 1
+    showing_to = min(end_idx, total_products)
+    message_text = f"📦 {product_type} ({showing_from}-{showing_to} из {total_products})\n\nВыберите продукт:"
+    
+    try:
+        await query.edit_message_text(message_text, reply_markup=reply_markup)
+    except telegram.error.BadRequest as e:
+        if "no text in the message to edit" in str(e).lower():
+            await query.message.delete()
+            await query.message.reply_text(message_text, reply_markup=reply_markup)
+        else:
+            raise e
 
 
 async def show_authors(query, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -549,6 +637,7 @@ async def handle_back_to_main(query, context: ContextTypes.DEFAULT_TYPE) -> None
     """Returns to main menu."""
     keyboard = [
         [InlineKeyboardButton("Выбор по автору", callback_data='select_author')],
+        [InlineKeyboardButton("Выбор по продукту", callback_data='select_product')],
         [InlineKeyboardButton("Корзина", callback_data='view_cart')],
         [InlineKeyboardButton("Итоги", callback_data='view_totals')],
     ]
@@ -588,7 +677,7 @@ def main() -> None:
 
     # Start the Bot
     print("Bot is running...")
-    application.run_polling()
+    application.run_polling(poll_interval=15)
 
 
 if __name__ == '__main__':
