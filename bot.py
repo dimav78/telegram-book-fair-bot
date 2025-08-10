@@ -1067,7 +1067,7 @@ def main() -> None:
 
     # Start the Bot
     print("Bot is running...")
-    application.run_polling(poll_interval=10)
+    application.run_polling()
 
 
 if __name__ == '__main__':
