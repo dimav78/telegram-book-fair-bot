@@ -1042,6 +1042,9 @@ async def handle_back_to_main(query, context: ContextTypes.DEFAULT_TYPE) -> None
                 'Добро пожаловать в кассу книжной ярмарки! Выберите действие:',
                 reply_markup=reply_markup
             )
+        elif "message is not modified" in str(e).lower():
+            # Message content is identical, no need to edit
+            await query.answer()
         else:
             raise e
 
