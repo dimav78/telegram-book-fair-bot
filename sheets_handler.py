@@ -208,4 +208,105 @@ def record_transaction(product_id, author_id, payment_method, amount):
         print(f"Error recording transaction: {e}")
         return False
 
+@retry_with_backoff()
+def get_transactions_from_date(start_date=None):
+    """Fetches transactions from a specific date onwards. If no date provided, gets all transactions."""
+    if not spreadsheet:
+        return []
+    try:
+        transactions_sheet = spreadsheet.worksheet("Transactions")
+        all_transactions = transactions_sheet.get_all_records()
+        
+        if not start_date:
+            return all_transactions
+            
+        from datetime import datetime
+        # Filter transactions by date
+        filtered_transactions = []
+        for transaction in all_transactions:
+            transaction_date_str = transaction.get('Timestamp', '')
+            if transaction_date_str:
+                try:
+                    transaction_date = datetime.strptime(transaction_date_str.split(' ')[0], '%Y-%m-%d')
+                    start_date_obj = datetime.strptime(start_date, '%Y-%m-%d')
+                    if transaction_date >= start_date_obj:
+                        filtered_transactions.append(transaction)
+                except ValueError:
+                    continue
+        
+        return filtered_transactions
+    except Exception as e:
+        print(f"Error fetching transactions: {e}")
+        return []
+
+def get_sales_summary_by_author(start_date=None):
+    """Gets sales summary grouped by author with cash/cashless breakdown."""
+    transactions = get_transactions_from_date(start_date)
+    authors = get_authors()
+    
+    # Create author mapping
+    author_map = {author.get('AuthorID'): author.get('Name', 'Неизвестный автор') for author in authors}
+    
+    # Group by author
+    summary = {}
+    for transaction in transactions:
+        author_id = transaction.get('AuthorID')
+        payment_method = transaction.get('PaymentMethod', '').lower()
+        amount = transaction.get('Amount', 0)
+        
+        if isinstance(amount, str):
+            try:
+                amount = float(amount)
+            except ValueError:
+                amount = 0
+        
+        author_name = author_map.get(author_id, f'Автор #{author_id}')
+        
+        if author_name not in summary:
+            summary[author_name] = {
+                'author_id': author_id,
+                'cash': 0,
+                'cashless': 0,
+                'total': 0,
+                'transactions': []
+            }
+        
+        summary[author_name]['transactions'].append(transaction)
+        summary[author_name]['total'] += amount
+        
+        if payment_method == 'cash':
+            summary[author_name]['cash'] += amount
+        elif payment_method == 'cashless':
+            summary[author_name]['cashless'] += amount
+    
+    return summary
+
+def get_author_transactions_detail(author_id, start_date=None):
+    """Gets detailed transaction list for a specific author."""
+    transactions = get_transactions_from_date(start_date)
+    all_products = get_all_products()
+    
+    # Create product mapping
+    product_map = {product.get('ProductID'): product for product in all_products}
+    
+    # Filter by author
+    author_transactions = []
+    for transaction in transactions:
+        if transaction.get('AuthorID') == author_id:
+            product_id = transaction.get('ProductID')
+            product_info = product_map.get(product_id, {})
+            
+            transaction_detail = {
+                'timestamp': transaction.get('Timestamp', ''),
+                'product_title': product_info.get('Title', f'Продукт #{product_id}'),
+                'amount': transaction.get('Amount', 0),
+                'payment_method': transaction.get('PaymentMethod', ''),
+                'transaction_id': transaction.get('TransactionID', '')
+            }
+            author_transactions.append(transaction_detail)
+    
+    # Sort by timestamp (newest first)
+    author_transactions.sort(key=lambda x: x['timestamp'], reverse=True)
+    return author_transactions
+
 # setup_worksheets() has been moved to local_admin.py (local-only file)

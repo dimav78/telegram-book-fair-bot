@@ -74,6 +74,14 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
         await show_cart(query, context)
     elif query.data == 'view_totals':
         await show_totals(query, context)
+    elif query.data.startswith('totals_date_'):
+        date = query.data.split('_')[2]
+        await show_sales_summary(query, context, date)
+    elif query.data.startswith('author_details_'):
+        parts = query.data.split('_')
+        author_id = int(parts[2])
+        date = parts[3] if len(parts) > 3 else None
+        await show_author_details(query, context, author_id, date)
     elif query.data == 'payment_cashless':
         await handle_cashless_payment(query, context)
     elif query.data == 'payment_cash':
@@ -764,8 +772,252 @@ async def confirm_payment(query, context: ContextTypes.DEFAULT_TYPE, payment_met
 
 
 async def show_totals(query, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """Shows daily totals (placeholder implementation)."""
-    await query.edit_message_text("📊 Функция просмотра итогов будет реализована позднее.")
+    """Shows date selection for totals view."""
+    from datetime import datetime, timedelta
+    
+    # Generate date options
+    today = datetime.now()
+    yesterday = today - timedelta(days=1)
+    week_ago = today - timedelta(days=7)
+    month_ago = today - timedelta(days=30)
+    
+    keyboard = [
+        [InlineKeyboardButton("📅 Сегодня", callback_data=f'totals_date_{today.strftime("%Y-%m-%d")}')],
+        [InlineKeyboardButton("📅 Вчера", callback_data=f'totals_date_{yesterday.strftime("%Y-%m-%d")}')],
+        [InlineKeyboardButton("📅 За неделю", callback_data=f'totals_date_{week_ago.strftime("%Y-%m-%d")}')],
+        [InlineKeyboardButton("📅 За месяц", callback_data=f'totals_date_{month_ago.strftime("%Y-%m-%d")}')],
+        [InlineKeyboardButton("📅 Все время", callback_data='totals_date_all')],
+        [InlineKeyboardButton("⬅️ Назад", callback_data='back_to_main')]
+    ]
+    reply_markup = InlineKeyboardMarkup(keyboard)
+    
+    try:
+        await query.edit_message_text(
+            "📊 *Итоги продаж*\n\nВыберите период для просмотра:",
+            parse_mode='Markdown',
+            reply_markup=reply_markup
+        )
+    except telegram.error.BadRequest as e:
+        if "no text in the message to edit" in str(e).lower():
+            await query.message.delete()
+            await query.message.reply_text(
+                "📊 *Итоги продаж*\n\nВыберите период для просмотра:",
+                parse_mode='Markdown',
+                reply_markup=reply_markup
+            )
+        else:
+            raise e
+
+
+async def show_sales_summary(query, context: ContextTypes.DEFAULT_TYPE, date: str) -> None:
+    """Shows sales summary by author for the selected date."""
+    try:
+        # Get sales data
+        start_date = None if date == 'all' else date
+        summary = sheets_handler.get_sales_summary_by_author(start_date)
+        
+        if not summary:
+            keyboard = [[InlineKeyboardButton("⬅️ К выбору периода", callback_data='view_totals')]]
+            reply_markup = InlineKeyboardMarkup(keyboard)
+            await query.edit_message_text(
+                "📊 Нет данных о продажах за выбранный период.",
+                reply_markup=reply_markup
+            )
+            return
+        
+        # Format date string for display
+        from datetime import datetime
+        if date == 'all':
+            period_text = "за все время"
+        else:
+            try:
+                date_obj = datetime.strptime(date, '%Y-%m-%d')
+                period_text = f"с {date_obj.strftime('%d.%m.%Y')}"
+            except:
+                period_text = f"с {date}"
+        
+        message_lines = [f"📊 *Итоги продаж {period_text}*\n"]
+        
+        # Calculate totals
+        total_cash = sum(author_data['cash'] for author_data in summary.values())
+        total_cashless = sum(author_data['cashless'] for author_data in summary.values())
+        grand_total = total_cash + total_cashless
+        
+        # Sort authors by total sales (descending)
+        sorted_authors = sorted(summary.items(), key=lambda x: x[1]['total'], reverse=True)
+        
+        keyboard = []
+        for author_name, author_data in sorted_authors:
+            cash = author_data['cash']
+            cashless = author_data['cashless']
+            total = author_data['total']
+            author_id = author_data['author_id']
+            
+            # Format amounts
+            if cash > 0 and cashless > 0:
+                amounts_text = f"{total:.0f}₽ (💵{cash:.0f} + 💳{cashless:.0f})"
+            elif cash > 0:
+                amounts_text = f"{total:.0f}₽ (💵 наличные)"
+            elif cashless > 0:
+                amounts_text = f"{total:.0f}₽ (💳 безнал)"
+            else:
+                amounts_text = "0₽"
+            
+            # Create button for author details
+            button_text = f"{author_name}: {amounts_text}"
+            # Truncate if too long
+            if len(button_text) > 45:
+                button_text = button_text[:42] + "..."
+            
+            callback_data = f'author_details_{author_id}_{date}' if date != 'all' else f'author_details_{author_id}_all'
+            keyboard.append([InlineKeyboardButton(button_text, callback_data=callback_data)])
+        
+        # Add summary at the end of message
+        message_lines.append("📈 *ОБЩИЙ ИТОГ:*")
+        if total_cash > 0:
+            message_lines.append(f"💵 Наличные: {total_cash:.0f} руб.")
+        if total_cashless > 0:
+            message_lines.append(f"💳 Безнал: {total_cashless:.0f} руб.")
+        message_lines.append(f"💰 **Всего: {grand_total:.0f} руб.**")
+        
+        # Add back button
+        keyboard.append([InlineKeyboardButton("⬅️ К выбору периода", callback_data='view_totals')])
+        
+        reply_markup = InlineKeyboardMarkup(keyboard)
+        
+        await query.edit_message_text(
+            '\n'.join(message_lines),
+            parse_mode='Markdown',
+            reply_markup=reply_markup
+        )
+        
+    except Exception as e:
+        logger.error(f"Error showing sales summary: {e}")
+        keyboard = [[InlineKeyboardButton("⬅️ К выбору периода", callback_data='view_totals')]]
+        reply_markup = InlineKeyboardMarkup(keyboard)
+        await query.edit_message_text(
+            "❌ Ошибка при загрузке данных.",
+            reply_markup=reply_markup
+        )
+
+
+async def show_author_details(query, context: ContextTypes.DEFAULT_TYPE, author_id: int, date: str = None) -> None:
+    """Shows detailed sales information for a specific author."""
+    try:
+        # Get author info
+        authors = sheets_handler.get_authors()
+        author = None
+        for a in authors:
+            if a.get('AuthorID') == author_id:
+                author = a
+                break
+        
+        if not author:
+            await query.edit_message_text("❌ Автор не найден.")
+            return
+        
+        author_name = author.get('Name', 'Неизвестный автор')
+        start_date = None if date == 'all' else date
+        
+        # Get detailed transactions
+        transactions = sheets_handler.get_author_transactions_detail(author_id, start_date)
+        
+        if not transactions:
+            keyboard = [[InlineKeyboardButton("⬅️ Назад к итогам", callback_data=f'totals_date_{date}')]]
+            reply_markup = InlineKeyboardMarkup(keyboard)
+            await query.edit_message_text(
+                f"📚 *{author_name}*\n\nНет продаж за выбранный период.",
+                parse_mode='Markdown',
+                reply_markup=reply_markup
+            )
+            return
+        
+        # Calculate totals
+        total_amount = 0
+        cash_amount = 0
+        cashless_amount = 0
+        
+        for transaction in transactions:
+            amount = transaction['amount']
+            if isinstance(amount, str):
+                try:
+                    amount = float(amount)
+                except ValueError:
+                    amount = 0
+            
+            total_amount += amount
+            payment_method = transaction['payment_method'].lower()
+            if payment_method == 'cash':
+                cash_amount += amount
+            elif payment_method == 'cashless':
+                cashless_amount += amount
+        
+        # Format period text
+        if date == 'all':
+            period_text = "за все время"
+        else:
+            try:
+                from datetime import datetime
+                date_obj = datetime.strptime(date, '%Y-%m-%d')
+                period_text = f"с {date_obj.strftime('%d.%m.%Y')}"
+            except:
+                period_text = f"с {date}"
+        
+        # Build message
+        message_lines = [f"📚 *{author_name}*"]
+        message_lines.append(f"📊 Продажи {period_text}\n")
+        
+        # Summary
+        message_lines.append("💰 *Итого:*")
+        if cash_amount > 0:
+            message_lines.append(f"💵 Наличные: {cash_amount:.0f} руб.")
+        if cashless_amount > 0:
+            message_lines.append(f"💳 Безнал: {cashless_amount:.0f} руб.")
+        message_lines.append(f"**Всего: {total_amount:.0f} руб.**\n")
+        
+        # Transactions list
+        message_lines.append(f"📋 *Продано товаров: {len(transactions)}*")
+        
+        # Show up to 10 most recent transactions
+        for i, transaction in enumerate(transactions[:10]):
+            payment_emoji = "💵" if transaction['payment_method'].lower() == 'cash' else "💳"
+            timestamp = transaction['timestamp'].split(' ')[0] if transaction['timestamp'] else 'Неизвестно'
+            try:
+                from datetime import datetime
+                date_obj = datetime.strptime(timestamp, '%Y-%m-%d')
+                formatted_date = date_obj.strftime('%d.%m')
+            except:
+                formatted_date = timestamp
+            
+            amount = transaction['amount']
+            if isinstance(amount, str):
+                try:
+                    amount = float(amount)
+                except ValueError:
+                    amount = 0
+            
+            message_lines.append(f"{i+1}. {transaction['product_title']} - {payment_emoji} {amount:.0f}₽ ({formatted_date})")
+        
+        if len(transactions) > 10:
+            message_lines.append(f"... и еще {len(transactions) - 10} транзакций")
+        
+        keyboard = [[InlineKeyboardButton("⬅️ Назад к итогам", callback_data=f'totals_date_{date}')]]
+        reply_markup = InlineKeyboardMarkup(keyboard)
+        
+        await query.edit_message_text(
+            '\n'.join(message_lines),
+            parse_mode='Markdown',
+            reply_markup=reply_markup
+        )
+        
+    except Exception as e:
+        logger.error(f"Error showing author details: {e}")
+        keyboard = [[InlineKeyboardButton("⬅️ Назад к итогам", callback_data=f'totals_date_{date}' if date else 'view_totals')]]
+        reply_markup = InlineKeyboardMarkup(keyboard)
+        await query.edit_message_text(
+            "❌ Ошибка при загрузке данных автора.",
+            reply_markup=reply_markup
+        )
 
 
 async def handle_back_to_main(query, context: ContextTypes.DEFAULT_TYPE) -> None:
