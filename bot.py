@@ -64,6 +64,9 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
     elif query.data.startswith('product_'):
         product_id = int(query.data.split('_')[1])
         await show_product_details(query, context, product_id)
+    elif query.data.startswith('add_to_cart_discount_'):
+        product_id = int(query.data.split('_')[4])
+        await add_to_cart(query, context, product_id, with_discount=True)
     elif query.data.startswith('add_to_cart_'):
         product_id = int(query.data.split('_')[3])
         await add_to_cart(query, context, product_id)
@@ -253,6 +256,7 @@ async def show_product_details(query, context: ContextTypes.DEFAULT_TYPE, produc
     price = product.get('Price', 0)
     photo_url = product.get('Photo_URL', '')
     author_id = product.get('AuthorID')
+    discount = product.get('Discount', 0)
     
     # Find author name
     author_name = 'Неизвестный автор'
@@ -265,8 +269,14 @@ async def show_product_details(query, context: ContextTypes.DEFAULT_TYPE, produc
     
     keyboard = [
         [InlineKeyboardButton("🛒 Добавить в корзину", callback_data=f'add_to_cart_{product_id}')],
-        [InlineKeyboardButton("⬅️ К книгам автора", callback_data=f'author_{author_id}')]
     ]
+    
+    # Add discount button if discount is available
+    if discount and discount > 0:
+        keyboard.insert(1, [InlineKeyboardButton(f"В корзину со скидкой {int(discount)} руб.", callback_data=f'add_to_cart_discount_{product_id}')])
+    
+    keyboard.append([InlineKeyboardButton("⬅️ К книгам автора", callback_data=f'author_{author_id}')])
+    
     reply_markup = InlineKeyboardMarkup(keyboard)
     
     try:
@@ -282,7 +292,7 @@ async def show_product_details(query, context: ContextTypes.DEFAULT_TYPE, produc
         await query.edit_message_text(text=message_text, parse_mode='Markdown', reply_markup=reply_markup)
 
 
-async def add_to_cart(query, context: ContextTypes.DEFAULT_TYPE, product_id: int) -> None:
+async def add_to_cart(query, context: ContextTypes.DEFAULT_TYPE, product_id: int, with_discount: bool = False) -> None:
     """Adds a product to the user's cart."""
     if 'cart' not in context.user_data:
         context.user_data['cart'] = []
@@ -303,9 +313,25 @@ async def add_to_cart(query, context: ContextTypes.DEFAULT_TYPE, product_id: int
             break
     
     if product:
-        context.user_data['cart'].append(product)
+        # Create a copy of the product to modify if discount is applied
+        cart_product = product.copy()
+        
+        if with_discount:
+            discount = product.get('Discount', 0)
+            if discount and discount > 0:
+                original_price = product.get('Price', 0)
+                discounted_price = max(0, original_price - discount)
+                cart_product['Price'] = discounted_price
+                cart_product['DiscountApplied'] = discount
+        
+        context.user_data['cart'].append(cart_product)
         title = product.get('Title', 'Без названия')
-        await query.answer(f"✅ '{title}' добавлена в корзину!")
+        
+        if with_discount and product.get('Discount', 0) > 0:
+            discount_amount = product.get('Discount', 0)
+            await query.answer(f"✅ '{title}' добавлена в корзину со скидкой {int(discount_amount)} руб.!")
+        else:
+            await query.answer(f"✅ '{title}' добавлена в корзину!")
         
         # Show updated options
         keyboard = [
@@ -352,7 +378,13 @@ async def show_cart(query, context: ContextTypes.DEFAULT_TYPE) -> None:
         title = product.get('Title', 'Без названия')
         price = product.get('Price', 0)
         total += price
-        message_lines.append(f"{i}. {title} - {price} руб.")
+        
+        # Check if discount was applied
+        if product.get('DiscountApplied', 0) > 0:
+            discount_amount = product.get('DiscountApplied', 0)
+            message_lines.append(f"{i}. {title} - {price} руб. (скидка {int(discount_amount)} руб.)")
+        else:
+            message_lines.append(f"{i}. {title} - {price} руб.")
     
     message_lines.append(f"\n💰 *Общая сумма: {total} руб.*")
     
@@ -413,7 +445,11 @@ async def handle_cashless_payment(query, context: ContextTypes.DEFAULT_TYPE) -> 
     for i, product in enumerate(cart, 1):
         title = product.get('Title', 'Без названия')
         price = product.get('Price', 0)
-        cart_lines.append(f"{i}. {title} - {price} руб.")
+        if product.get('DiscountApplied', 0) > 0:
+            discount_amount = product.get('DiscountApplied', 0)
+            cart_lines.append(f"{i}. {title} - {price} руб. (скидка {int(discount_amount)} руб.)")
+        else:
+            cart_lines.append(f"{i}. {title} - {price} руб.")
     
     message_text = '\n'.join(cart_lines)
     
@@ -514,7 +550,11 @@ async def handle_cash_payment(query, context: ContextTypes.DEFAULT_TYPE) -> None
     for i, product in enumerate(cart, 1):
         title = product.get('Title', 'Без названия')
         price = product.get('Price', 0)
-        cart_lines.append(f"{i}. {title} - {price} руб.")
+        if product.get('DiscountApplied', 0) > 0:
+            discount_amount = product.get('DiscountApplied', 0)
+            cart_lines.append(f"{i}. {title} - {price} руб. (скидка {int(discount_amount)} руб.)")
+        else:
+            cart_lines.append(f"{i}. {title} - {price} руб.")
     
     message_text = '\n'.join(cart_lines)
     

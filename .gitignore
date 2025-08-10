@@ -17,6 +17,11 @@ __pycache__/
 .env
 config.py
 
+# Local admin files (not for deployment)
+local_admin.py
+*_local.py
+admin_*.py
+
 # Distribution / packaging
 .Python
 build/

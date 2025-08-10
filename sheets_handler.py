@@ -208,41 +208,4 @@ def record_transaction(product_id, author_id, payment_method, amount):
         print(f"Error recording transaction: {e}")
         return False
 
-def setup_worksheets():
-    """Creates the necessary worksheets and columns if they don't exist."""
-    if not spreadsheet:
-        print("No spreadsheet connection available")
-        return False
-    
-    try:
-        # Create Authors worksheet
-        try:
-            authors_sheet = spreadsheet.worksheet("Authors")
-            print("Authors worksheet already exists")
-        except gspread.WorksheetNotFound:
-            authors_sheet = spreadsheet.add_worksheet(title="Authors", rows="100", cols="10")
-            authors_sheet.append_row(["AuthorID", "Name", "QR_Code_URL", "Contact"])
-            print("Created Authors worksheet")
-        
-        # Create Products worksheet
-        try:
-            products_sheet = spreadsheet.worksheet("Products")
-            print("Products worksheet already exists")
-        except gspread.WorksheetNotFound:
-            products_sheet = spreadsheet.add_worksheet(title="Products", rows="100", cols="10")
-            products_sheet.append_row(["ProductID", "Title", "Description", "Price", "Photo_URL", "AuthorID"])
-            print("Created Products worksheet")
-        
-        # Create Transactions worksheet
-        try:
-            transactions_sheet = spreadsheet.worksheet("Transactions")
-            print("Transactions worksheet already exists")
-        except gspread.WorksheetNotFound:
-            transactions_sheet = spreadsheet.add_worksheet(title="Transactions", rows="1000", cols="10")
-            transactions_sheet.append_row(["TransactionID", "ProductID", "AuthorID", "Payment_Method", "Amount", "Timestamp"])
-            print("Created Transactions worksheet")
-        
-        return True
-    except Exception as e:
-        print(f"Error setting up worksheets: {e}")
-        return False
+# setup_worksheets() has been moved to local_admin.py (local-only file)
