@@ -251,7 +251,7 @@ def get_sales_summary_by_author(start_date=None):
     summary = {}
     for transaction in transactions:
         author_id = transaction.get('AuthorID')
-        payment_method = transaction.get('PaymentMethod', '').lower()
+        payment_method = transaction.get('Payment_Method', '').lower()
         amount = transaction.get('Amount', 0)
         
         if isinstance(amount, str):
@@ -300,7 +300,7 @@ def get_author_transactions_detail(author_id, start_date=None):
                 'timestamp': transaction.get('Timestamp', ''),
                 'product_title': product_info.get('Title', f'Продукт #{product_id}'),
                 'amount': transaction.get('Amount', 0),
-                'payment_method': transaction.get('PaymentMethod', ''),
+                'payment_method': transaction.get('Payment_Method', ''),
                 'transaction_id': transaction.get('TransactionID', '')
             }
             author_transactions.append(transaction_detail)
