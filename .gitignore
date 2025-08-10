@@ -136,3 +136,6 @@ dmypy.json
 
 # Pyre type checker
 .pyre/requirements.txt
+
+# Book fair info file
+bookfair_info.md
