@@ -22,6 +22,41 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 
+# --- Helper Functions ---
+def safe_message_text(text: str, max_length: int = 4000) -> str:
+    """Ensures message text doesn't exceed Telegram's limits."""
+    if len(text) <= max_length:
+        return text
+    
+    truncated = text[:max_length - 50]
+    return truncated + "\n\n... (сообщение обрезано из-за длины)"
+
+
+async def safe_edit_message_text(query, text: str, reply_markup=None, parse_mode=None):
+    """Safely edit message text with error handling."""
+    safe_text = safe_message_text(text)
+    try:
+        await query.edit_message_text(
+            text=safe_text,
+            reply_markup=reply_markup,
+            parse_mode=parse_mode
+        )
+    except telegram.error.BadRequest as e:
+        error_msg = str(e).lower()
+        if "no text in the message to edit" in error_msg or "message can't be edited" in error_msg:
+            await query.message.delete()
+            await query.message.reply_text(
+                text=safe_text,
+                reply_markup=reply_markup,
+                parse_mode=parse_mode
+            )
+        elif "message is not modified" in error_msg:
+            await query.answer()
+        else:
+            logger.error(f"Error editing message: {e}")
+            raise e
+
+
 # --- Command Handlers ---
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Sends a welcome message when the /start command is issued."""
@@ -403,7 +438,15 @@ async def show_cart(query, context: ContextTypes.DEFAULT_TYPE) -> None:
     if not cart:
         keyboard = [[InlineKeyboardButton("➕ Добавить книги", callback_data='select_author')]]
         reply_markup = InlineKeyboardMarkup(keyboard)
-        await query.edit_message_text("🛒 Ваша корзина пуста", reply_markup=reply_markup)
+        try:
+            await query.edit_message_text("🛒 Ваша корзина пуста", reply_markup=reply_markup)
+        except telegram.error.BadRequest as e:
+            if "no text in the message to edit" in str(e).lower():
+                await query.message.delete()
+                await query.message.reply_text("🛒 Ваша корзина пуста", reply_markup=reply_markup)
+            else:
+                logger.error(f"Error showing empty cart: {e}")
+                await query.answer("❌ Ошибка при показе корзины")
         return
     
     # Get payment status for each author
@@ -501,14 +544,7 @@ async def show_cart(query, context: ContextTypes.DEFAULT_TYPE) -> None:
     
     reply_markup = InlineKeyboardMarkup(keyboard)
     
-    try:
-        await query.edit_message_text('\n'.join(message_lines), parse_mode='Markdown', reply_markup=reply_markup)
-    except telegram.error.BadRequest as e:
-        if "no text in the message to edit" in str(e).lower():
-            await query.message.delete()
-            await query.message.reply_text('\n'.join(message_lines), parse_mode='Markdown', reply_markup=reply_markup)
-        else:
-            raise e
+    await safe_edit_message_text(query, '\n'.join(message_lines), reply_markup=reply_markup, parse_mode='Markdown')
 
 
 async def handle_cashless_payment(query, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -1354,11 +1390,7 @@ async def show_sales_summary(query, context: ContextTypes.DEFAULT_TYPE, date: st
         
         reply_markup = InlineKeyboardMarkup(keyboard)
         
-        await query.edit_message_text(
-            '\n'.join(message_lines),
-            parse_mode='Markdown',
-            reply_markup=reply_markup
-        )
+        await safe_edit_message_text(query, '\n'.join(message_lines), reply_markup=reply_markup, parse_mode='Markdown')
         
     except Exception as e:
         logger.error(f"Error showing sales summary: {e}")
@@ -1473,11 +1505,7 @@ async def show_author_details(query, context: ContextTypes.DEFAULT_TYPE, author_
         keyboard = [[InlineKeyboardButton("⬅️ Назад к итогам", callback_data=f'totals_date_{date}')]]
         reply_markup = InlineKeyboardMarkup(keyboard)
         
-        await query.edit_message_text(
-            '\n'.join(message_lines),
-            parse_mode='Markdown',
-            reply_markup=reply_markup
-        )
+        await safe_edit_message_text(query, '\n'.join(message_lines), reply_markup=reply_markup, parse_mode='Markdown')
         
     except Exception as e:
         logger.error(f"Error showing author details: {e}")
