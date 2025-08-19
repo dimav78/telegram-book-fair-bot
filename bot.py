@@ -92,7 +92,7 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
     elif query.data == 'select_product':
         await show_product_types(query, context)
     elif query.data == 'lottery':
-        await show_lottery_products(query, context)
+        await show_lottery_authors(query, context)
     elif query.data.startswith('product_type_'):
         product_type = query.data.split('_')[2]
         await show_products_by_type(query, context, product_type)
@@ -152,6 +152,12 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
         product_type = parts[2]
         page = int(parts[3])
         await show_products_by_type(query, context, product_type, page)
+    elif query.data.startswith('lottery_author_'):
+        author_id = int(query.data.split('_')[2])
+        await show_lottery_products_by_author(query, context, author_id)
+    elif query.data.startswith('lottery_product_'):
+        product_id = int(query.data.split('_')[2])
+        await show_lottery_product_details(query, context, product_id)
     elif query.data.startswith('add_lottery_'):
         product_id = int(query.data.split('_')[2])
         await add_lottery_to_cart(query, context, product_id)
@@ -359,6 +365,56 @@ async def show_product_details(query, context: ContextTypes.DEFAULT_TYPE, produc
             await query.edit_message_text(text=message_text, parse_mode='Markdown', reply_markup=reply_markup)
     except Exception as e:
         logger.error(f"Error sending product details: {e}")
+        await query.edit_message_text(text=message_text, parse_mode='Markdown', reply_markup=reply_markup)
+
+
+async def show_lottery_product_details(query, context: ContextTypes.DEFAULT_TYPE, product_id: int) -> None:
+    """Shows lottery product details with photo and add to lottery cart button."""
+    # Get all products to find the specific one
+    all_products = sheets_handler.get_all_products()
+    
+    product = None
+    for p in all_products:
+        if p.get('ProductID') == product_id:
+            product = p
+            break
+    
+    if not product:
+        await query.edit_message_text("Товар не найден.")
+        return
+    
+    title = product.get('Title', 'Без названия')
+    description = product.get('Description', 'Описание отсутствует')
+    photo_url = product.get('Photo_URL', '')
+    author_id = product.get('AuthorID')
+    
+    # Find author name
+    authors = sheets_handler.get_authors()
+    author_name = 'Неизвестный автор'
+    for author in authors:
+        if author.get('AuthorID') == author_id:
+            author_name = author.get('Name', 'Неизвестный автор')
+            break
+    
+    message_text = f"🎰 *Лотерея: {title}*\n\n👤 Автор: {author_name}\n💰 Цена лотереи: 200 руб.\n\n📝 {description}"
+    
+    keyboard = [
+        [InlineKeyboardButton("🛒 Добавить в корзину", callback_data=f'add_lottery_{product_id}')],
+        [InlineKeyboardButton("⬅️ К товарам автора", callback_data=f'lottery_author_{author_id}')]
+    ]
+    
+    reply_markup = InlineKeyboardMarkup(keyboard)
+    
+    try:
+        if photo_url:
+            await query.edit_message_media(
+                media=telegram.InputMediaPhoto(media=photo_url, caption=message_text, parse_mode='Markdown'),
+                reply_markup=reply_markup
+            )
+        else:
+            await query.edit_message_text(text=message_text, parse_mode='Markdown', reply_markup=reply_markup)
+    except Exception as e:
+        logger.error(f"Error sending lottery product details: {e}")
         await query.edit_message_text(text=message_text, parse_mode='Markdown', reply_markup=reply_markup)
 
 
@@ -1547,8 +1603,8 @@ async def handle_back_to_main(query, context: ContextTypes.DEFAULT_TYPE) -> None
             raise e
 
 
-async def show_lottery_products(query, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """Shows products eligible for lottery (where Lottery = Yes)."""
+async def show_lottery_authors(query, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Shows authors who have lottery-eligible products."""
     # Get lottery-eligible products
     lottery_products = sheets_handler.get_lottery_products()
     
@@ -1558,14 +1614,24 @@ async def show_lottery_products(query, context: ContextTypes.DEFAULT_TYPE) -> No
         await query.edit_message_text("Нет товаров, доступных для лотереи.", reply_markup=reply_markup)
         return
     
+    # Get unique author IDs from lottery products
+    author_ids = set(product.get('AuthorID') for product in lottery_products)
+    
+    # Get author details
+    authors = sheets_handler.get_authors()
+    lottery_authors = [author for author in authors if author.get('AuthorID') in author_ids]
+    
+    if not lottery_authors:
+        keyboard = [[InlineKeyboardButton("⬅️ Назад", callback_data='back_to_main')]]
+        reply_markup = InlineKeyboardMarkup(keyboard)
+        await query.edit_message_text("Нет авторов с товарами для лотереи.", reply_markup=reply_markup)
+        return
+    
     keyboard = []
-    for product in lottery_products:
-        product_title = product.get('Title', 'Без названия')
-        product_id = product.get('ProductID')
-        # Truncate title if too long for button
-        if len(product_title) > 30:
-            product_title = product_title[:27] + "..."
-        keyboard.append([InlineKeyboardButton(product_title, callback_data=f'add_lottery_{product_id}')])
+    for author in lottery_authors:
+        author_name = author.get('Name', 'Неизвестный автор')
+        author_id = author.get('AuthorID')
+        keyboard.append([InlineKeyboardButton(author_name, callback_data=f'lottery_author_{author_id}')])
     
     # Add back button
     keyboard.append([InlineKeyboardButton("⬅️ Назад", callback_data='back_to_main')])
@@ -1574,14 +1640,66 @@ async def show_lottery_products(query, context: ContextTypes.DEFAULT_TYPE) -> No
     
     try:
         await query.edit_message_text(
-            '🎰 Лотерея - выберите выигранный товар:\n\nЦена: 200 руб.',
+            '🎰 Лотерея - выберите автора:\n\nЦена: 200 руб.',
             reply_markup=reply_markup
         )
     except telegram.error.BadRequest as e:
         if "no text in the message to edit" in str(e).lower():
             await query.message.delete()
             await query.message.reply_text(
-                '🎰 Лотерея - выберите выигранный товар:\n\nЦена: 200 руб.',
+                '🎰 Лотерея - выберите автора:\n\nЦена: 200 руб.',
+                reply_markup=reply_markup
+            )
+        else:
+            raise e
+
+
+async def show_lottery_products_by_author(query, context: ContextTypes.DEFAULT_TYPE, author_id: int) -> None:
+    """Shows lottery products for a specific author."""
+    # Get all lottery products
+    lottery_products = sheets_handler.get_lottery_products()
+    
+    # Filter products by author
+    author_lottery_products = [product for product in lottery_products if product.get('AuthorID') == author_id]
+    
+    if not author_lottery_products:
+        keyboard = [[InlineKeyboardButton("⬅️ К авторам лотереи", callback_data='lottery')]]
+        reply_markup = InlineKeyboardMarkup(keyboard)
+        await query.edit_message_text("У этого автора нет товаров для лотереи.", reply_markup=reply_markup)
+        return
+    
+    # Get author name
+    authors = sheets_handler.get_authors()
+    author_name = 'Неизвестный автор'
+    for author in authors:
+        if author.get('AuthorID') == author_id:
+            author_name = author.get('Name', 'Неизвестный автор')
+            break
+    
+    keyboard = []
+    for product in author_lottery_products:
+        product_title = product.get('Title', 'Без названия')
+        product_id = product.get('ProductID')
+        # Truncate title if too long for button
+        if len(product_title) > 30:
+            product_title = product_title[:27] + "..."
+        keyboard.append([InlineKeyboardButton(product_title, callback_data=f'lottery_product_{product_id}')])
+    
+    # Add back button
+    keyboard.append([InlineKeyboardButton("⬅️ К авторам лотереи", callback_data='lottery')])
+    
+    reply_markup = InlineKeyboardMarkup(keyboard)
+    
+    try:
+        await query.edit_message_text(
+            f'🎰 Лотерея - {author_name}\n\nВыберите выигранный товар:\nЦена: 200 руб.',
+            reply_markup=reply_markup
+        )
+    except telegram.error.BadRequest as e:
+        if "no text in the message to edit" in str(e).lower():
+            await query.message.delete()
+            await query.message.reply_text(
+                f'🎰 Лотерея - {author_name}\n\nВыберите выигранный товар:\nЦена: 200 руб.',
                 reply_markup=reply_markup
             )
         else:
