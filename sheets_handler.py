@@ -188,6 +188,11 @@ def get_products_by_author(author_id):
     all_products = get_all_products()
     return [product for product in all_products if product.get('AuthorID') == author_id]
 
+def get_lottery_products():
+    """Fetches all products eligible for lottery (where Lottery = Yes)."""
+    all_products = get_all_products()
+    return [product for product in all_products if product.get('Lottery', '').strip().lower() == 'yes']
+
 @retry_with_backoff()
 def record_transaction(product_id, author_id, payment_method, amount):
     """Adds a new row to the 'Transactions' worksheet."""

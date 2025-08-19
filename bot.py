@@ -28,6 +28,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     keyboard = [
         [InlineKeyboardButton("Выбор по автору", callback_data='select_author')],
         [InlineKeyboardButton("Выбор по продукту", callback_data='select_product')],
+        [InlineKeyboardButton("🎰 Лотерея", callback_data='lottery')],
         [InlineKeyboardButton("Корзина", callback_data='view_cart')],
         [InlineKeyboardButton("Итоги", callback_data='view_totals')],
     ]
@@ -55,10 +56,12 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
         await show_authors(query, context)
     elif query.data == 'select_product':
         await show_product_types(query, context)
+    elif query.data == 'lottery':
+        await show_lottery_products(query, context)
     elif query.data.startswith('product_type_'):
         product_type = query.data.split('_')[2]
         await show_products_by_type(query, context, product_type)
-    elif query.data.startswith('author_'):
+    elif query.data.startswith('author_') and not query.data.startswith('author_payment_') and not query.data.startswith('author_details_'):
         author_id = int(query.data.split('_')[1])
         await show_products_by_author(query, context, author_id)
     elif query.data.startswith('product_'):
@@ -86,12 +89,27 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
         await handle_cashless_payment(query, context)
     elif query.data == 'payment_cash':
         await handle_cash_payment(query, context)
+    elif query.data.startswith('author_payment_') and not query.data.startswith('author_payment_cashless_') and not query.data.startswith('author_payment_cash_'):
+        author_id = int(query.data.split('_')[2])
+        await show_author_payment_options(query, context, author_id)
+    elif query.data.startswith('author_payment_cashless_'):
+        author_id = int(query.data.split('_')[3])
+        await handle_author_cashless_payment(query, context, author_id)
+    elif query.data.startswith('author_payment_cash_'):
+        author_id = int(query.data.split('_')[3])
+        await handle_author_cash_payment(query, context, author_id)
     elif query.data == 'clear_cart':
         await clear_cart(query, context)
     elif query.data == 'confirm_cashless':
         await confirm_payment(query, context, 'cashless')
     elif query.data == 'confirm_cash':
         await confirm_payment(query, context, 'cash')
+    elif query.data.startswith('confirm_author_cashless_'):
+        author_id = int(query.data.split('_')[3])
+        await confirm_author_payment(query, context, author_id, 'cashless')
+    elif query.data.startswith('confirm_author_cash_'):
+        author_id = int(query.data.split('_')[3])
+        await confirm_author_payment(query, context, author_id, 'cash')
     elif query.data == 'back_to_main':
         await handle_back_to_main(query, context)
     elif query.data.startswith('products_page_'):
@@ -99,6 +117,9 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
         product_type = parts[2]
         page = int(parts[3])
         await show_products_by_type(query, context, product_type, page)
+    elif query.data.startswith('add_lottery_'):
+        product_id = int(query.data.split('_')[2])
+        await add_lottery_to_cart(query, context, product_id)
 
 
 async def show_product_types(query, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -376,7 +397,7 @@ async def add_to_cart(query, context: ContextTypes.DEFAULT_TYPE, product_id: int
 
 
 async def show_cart(query, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """Shows the contents of the user's cart."""
+    """Shows the contents of the user's cart grouped by author."""
     cart = context.user_data.get('cart', [])
     
     if not cart:
@@ -385,49 +406,99 @@ async def show_cart(query, context: ContextTypes.DEFAULT_TYPE) -> None:
         await query.edit_message_text("🛒 Ваша корзина пуста", reply_markup=reply_markup)
         return
     
-    # Calculate totals with promotions
-    original_total = sum(product.get('Price', 0) for product in cart)
-    final_total, promotion_discounts = calculate_cart_with_promotions(cart)
+    # Get payment status for each author
+    author_payments = context.user_data.get('author_payments', {})
+    
+    # Group products by author
+    authors = sheets_handler.get_authors()
+    author_map = {author.get('AuthorID'): author.get('Name', 'Неизвестный автор') for author in authors}
+    
+    authors_in_cart = {}
+    for product in cart:
+        author_id = product.get('AuthorID')
+        if author_id not in authors_in_cart:
+            authors_in_cart[author_id] = []
+        authors_in_cart[author_id].append(product)
     
     message_lines = ["🛒 *Ваша корзина:*\n"]
     
-    # Create a map of products that get promotion discounts for display
-    promo_discount_map = {}
-    for discount_info in promotion_discounts:
-        product_id = discount_info['product'].get('ProductID')
-        promo_discount_map[product_id] = discount_info
-    
-    for i, product in enumerate(cart, 1):
-        title = product.get('Title', 'Без названия')
-        price = product.get('Price', 0)
-        product_id = product.get('ProductID')
+    # Display products grouped by author
+    for author_id, products in authors_in_cart.items():
+        author_name = author_map.get(author_id, f'Автор #{author_id}')
         
-        # Check for existing discount (monetary)
-        if product.get('DiscountApplied', 0) > 0:
-            discount_amount = product.get('DiscountApplied', 0)
-            message_lines.append(f"{i}. {title} - {price} руб. (скидка {int(discount_amount)} руб.)")
-        # Check for promotion discount
-        elif product_id in promo_discount_map:
-            promo_info = promo_discount_map[product_id]
-            message_lines.append(f"{i}. {title} - {price} руб. → БЕСПЛАТНО ({promo_info['reason']})")
-        else:
-            message_lines.append(f"{i}. {title} - {price} руб.")
+        # Check if this author is already paid
+        is_paid = author_payments.get(str(author_id), False)
+        payment_status = "✅ ОПЛАЧЕНО" if is_paid else ""
+        
+        message_lines.append(f"👤 **{author_name}** {payment_status}")
+        
+        # Calculate totals for this author with promotions
+        author_original_total = sum(product.get('Price', 0) for product in products)
+        author_final_total, author_promotion_discounts = calculate_cart_with_promotions(products)
+        
+        # Create a map of products that get promotion discounts for display
+        promo_discount_map = {}
+        for discount_info in author_promotion_discounts:
+            product_id = discount_info['product'].get('ProductID')
+            promo_discount_map[product_id] = discount_info
+        
+        for product in products:
+            title = product.get('Title', 'Без названия')
+            price = product.get('Price', 0)
+            product_id = product.get('ProductID')
+            
+            # Check if it's a lottery item
+            if product.get('IsLottery', False):
+                message_lines.append(f"  • 🎰 Лотерея: {title} - {price} руб.")
+            # Check for existing discount (monetary)
+            elif product.get('DiscountApplied', 0) > 0:
+                discount_amount = product.get('DiscountApplied', 0)
+                message_lines.append(f"  • {title} - {price} руб. (скидка {int(discount_amount)} руб.)")
+            # Check for promotion discount
+            elif product_id in promo_discount_map:
+                promo_info = promo_discount_map[product_id]
+                message_lines.append(f"  • {title} - {price} руб. → БЕСПЛАТНО ({promo_info['reason']})")
+            else:
+                message_lines.append(f"  • {title} - {price} руб.")
+        
+        # Show promotion savings for this author if any
+        if author_original_total != author_final_total:
+            savings = author_original_total - author_final_total
+            message_lines.append(f"  🎉 Экономия по акции «3 за 2»: {savings} руб.")
+        
+        message_lines.append(f"  💰 Сумма: **{author_final_total} руб.**\n")
     
-    # Show promotion savings if any
-    if original_total != final_total:
-        savings = original_total - final_total
-        message_lines.append(f"\n💰 К доплате: {original_total} руб.")
-        message_lines.append(f"🎉 Экономия по акции «3 за 2»: {savings} руб.")
-        message_lines.append(f"💵 *Итого к оплате: {final_total} руб.*")
+    # Calculate total cart value
+    total_cart_value = sum(calculate_cart_with_promotions(products)[0] 
+                          for products in authors_in_cart.values())
+    paid_amount = sum(calculate_cart_with_promotions(products)[0] 
+                     for author_id, products in authors_in_cart.items() 
+                     if author_payments.get(str(author_id), False))
+    remaining_amount = total_cart_value - paid_amount
+    
+    if paid_amount > 0:
+        message_lines.append(f"💳 Оплачено: {paid_amount} руб.")
+        message_lines.append(f"💰 Осталось оплатить: {remaining_amount} руб.")
     else:
-        message_lines.append(f"\n💰 *Общая сумма: {final_total} руб.*")
+        message_lines.append(f"💰 *Общая сумма: {total_cart_value} руб.*")
     
-    keyboard = [
-        [InlineKeyboardButton("💳 Безнал", callback_data='payment_cashless'),
-         InlineKeyboardButton("💵 Наличные", callback_data='payment_cash')],
-        [InlineKeyboardButton("🗑 Очистить корзину", callback_data='clear_cart')],
-        [InlineKeyboardButton("➕ Добавить еще", callback_data='select_author')]
-    ]
+    keyboard = []
+    
+    # Add payment buttons for each unpaid author
+    for author_id, products in authors_in_cart.items():
+        if not author_payments.get(str(author_id), False):
+            author_name = author_map.get(author_id, f'Автор #{author_id}')
+            author_total = calculate_cart_with_promotions(products)[0]
+            button_text = f"Оплата - {author_name} ({author_total} руб.)"
+            # Truncate if too long
+            if len(button_text) > 35:
+                button_text = f"Оплата - {author_name[:15]}... ({author_total} руб.)"
+            keyboard.append([InlineKeyboardButton(button_text, callback_data=f'author_payment_{author_id}')])
+    
+    # Add other actions
+    keyboard.append([InlineKeyboardButton("🗑 Очистить корзину", callback_data='clear_cart')])
+    keyboard.append([InlineKeyboardButton("➕ Добавить еще", callback_data='select_author')])
+    
     reply_markup = InlineKeyboardMarkup(keyboard)
     
     try:
@@ -480,7 +551,9 @@ async def handle_cashless_payment(query, context: ContextTypes.DEFAULT_TYPE) -> 
     for i, product in enumerate(cart, 1):
         title = product.get('Title', 'Без названия')
         price = product.get('Price', 0)
-        if product.get('DiscountApplied', 0) > 0:
+        if product.get('IsLottery', False):
+            cart_lines.append(f"{i}. 🎰 Лотерея: {title} - {price} руб.")
+        elif product.get('DiscountApplied', 0) > 0:
             discount_amount = product.get('DiscountApplied', 0)
             cart_lines.append(f"{i}. {title} - {price} руб. (скидка {int(discount_amount)} руб.)")
         else:
@@ -586,7 +659,9 @@ async def handle_cash_payment(query, context: ContextTypes.DEFAULT_TYPE) -> None
     for i, product in enumerate(cart, 1):
         title = product.get('Title', 'Без названия')
         price = product.get('Price', 0)
-        if product.get('DiscountApplied', 0) > 0:
+        if product.get('IsLottery', False):
+            cart_lines.append(f"{i}. 🎰 Лотерея: {title} - {price} руб.")
+        elif product.get('DiscountApplied', 0) > 0:
             discount_amount = product.get('DiscountApplied', 0)
             cart_lines.append(f"{i}. {title} - {price} руб. (скидка {int(discount_amount)} руб.)")
         else:
@@ -618,21 +693,301 @@ async def handle_cash_payment(query, context: ContextTypes.DEFAULT_TYPE) -> None
             raise e
 
 
+async def show_author_payment_options(query, context: ContextTypes.DEFAULT_TYPE, author_id: int) -> None:
+    """Shows payment options for a specific author."""
+    cart = context.user_data.get('cart', [])
+    
+    # Get products for this specific author
+    author_products = [product for product in cart if product.get('AuthorID') == author_id]
+    
+    if not author_products:
+        await query.answer("❌ У этого автора нет товаров в корзине")
+        return
+    
+    # Get author details
+    authors = sheets_handler.get_authors()
+    author = None
+    for a in authors:
+        if a.get('AuthorID') == author_id:
+            author = a
+            break
+    
+    if not author:
+        await query.answer("❌ Автор не найден")
+        return
+    
+    author_name = author.get('Name', 'Неизвестный автор')
+    
+    # Calculate total for this author with promotions
+    total, promotion_discounts = calculate_cart_with_promotions(author_products)
+    
+    # Create cart summary for this author
+    message_lines = [f"💳 *Оплата для {author_name}*\n"]
+    
+    # Create a map of products that get promotion discounts for display
+    promo_discount_map = {}
+    for discount_info in promotion_discounts:
+        product_id = discount_info['product'].get('ProductID')
+        promo_discount_map[product_id] = discount_info
+    
+    for product in author_products:
+        title = product.get('Title', 'Без названия')
+        price = product.get('Price', 0)
+        product_id = product.get('ProductID')
+        
+        # Check if it's a lottery item
+        if product.get('IsLottery', False):
+            message_lines.append(f"• 🎰 Лотерея: {title} - {price} руб.")
+        # Check for existing discount (monetary)
+        elif product.get('DiscountApplied', 0) > 0:
+            discount_amount = product.get('DiscountApplied', 0)
+            message_lines.append(f"• {title} - {price} руб. (скидка {int(discount_amount)} руб.)")
+        # Check for promotion discount
+        elif product_id in promo_discount_map:
+            promo_info = promo_discount_map[product_id]
+            message_lines.append(f"• {title} - {price} руб. → БЕСПЛАТНО ({promo_info['reason']})")
+        else:
+            message_lines.append(f"• {title} - {price} руб.")
+    
+    message_lines.append(f"\n💰 *Сумма к оплате: {total} руб.*")
+    
+    keyboard = [
+        [InlineKeyboardButton("💳 Безнал", callback_data=f'author_payment_cashless_{author_id}'),
+         InlineKeyboardButton("💵 Наличные", callback_data=f'author_payment_cash_{author_id}')],
+        [InlineKeyboardButton("⬅️ Назад к корзине", callback_data='view_cart')]
+    ]
+    reply_markup = InlineKeyboardMarkup(keyboard)
+    
+    try:
+        await query.edit_message_text('\n'.join(message_lines), parse_mode='Markdown', reply_markup=reply_markup)
+    except telegram.error.BadRequest as e:
+        if "no text in the message to edit" in str(e).lower():
+            await query.message.delete()
+            await query.message.reply_text('\n'.join(message_lines), parse_mode='Markdown', reply_markup=reply_markup)
+        else:
+            raise e
+
+
+async def handle_author_cashless_payment(query, context: ContextTypes.DEFAULT_TYPE, author_id: int) -> None:
+    """Handles cashless payment for a specific author."""
+    cart = context.user_data.get('cart', [])
+    
+    # Get products for this specific author
+    author_products = [product for product in cart if product.get('AuthorID') == author_id]
+    
+    if not author_products:
+        await query.answer("❌ У этого автора нет товаров в корзине")
+        return
+    
+    # Get author details
+    authors = sheets_handler.get_authors()
+    author = None
+    for a in authors:
+        if a.get('AuthorID') == author_id:
+            author = a
+            break
+    
+    if not author:
+        await query.answer("❌ Автор не найден")
+        return
+    
+    author_name = author.get('Name', 'Неизвестный автор')
+    qr_code_url = str(author.get('QR_Code_URL', '')).strip()
+    contact = str(author.get('Contact', '')).strip()
+    
+    # Calculate total for this author with promotions
+    total, promotion_discounts = calculate_cart_with_promotions(author_products)
+    
+    # Create cart summary for this author
+    cart_lines = [f"💳 *Безналичная оплата*\n"]
+    cart_lines.append(f"👤 Автор: {author_name}")
+    cart_lines.append(f"💰 Сумма: {total} руб.\n")
+    
+    for product in author_products:
+        title = product.get('Title', 'Без названия')
+        price = product.get('Price', 0)
+        if product.get('IsLottery', False):
+            cart_lines.append(f"• 🎰 Лотерея: {title} - {price} руб.")
+        elif product.get('DiscountApplied', 0) > 0:
+            discount_amount = product.get('DiscountApplied', 0)
+            cart_lines.append(f"• {title} - {price} руб. (скидка {int(discount_amount)} руб.)")
+        else:
+            cart_lines.append(f"• {title} - {price} руб.")
+    
+    message_text = '\n'.join(cart_lines)
+    
+    keyboard = [
+        [InlineKeyboardButton("✅ Подтвердить оплату", callback_data=f'confirm_author_cashless_{author_id}')],
+        [InlineKeyboardButton("⬅️ Назад к корзине", callback_data='view_cart')]
+    ]
+    reply_markup = InlineKeyboardMarkup(keyboard)
+    
+    try:
+        if qr_code_url:
+            # Display QR code image
+            await query.edit_message_media(
+                media=telegram.InputMediaPhoto(
+                    media=qr_code_url, 
+                    caption=message_text + f"\n\n📱 Отсканируйте QR-код для оплаты",
+                    parse_mode='Markdown'
+                ),
+                reply_markup=reply_markup
+            )
+        elif contact:
+            # Display contact info only
+            try:
+                await query.edit_message_text(
+                    text=message_text + f"\n\n📞 Контакт для оплаты: {contact}",
+                    parse_mode='Markdown',
+                    reply_markup=reply_markup
+                )
+            except telegram.error.BadRequest as e:
+                if "no text in the message to edit" in str(e).lower():
+                    await query.message.delete()
+                    await query.message.reply_text(
+                        text=message_text + f"\n\n📞 Контакт для оплаты: {contact}",
+                        parse_mode='Markdown',
+                        reply_markup=reply_markup
+                    )
+                else:
+                    raise e
+        else:
+            # No payment info available
+            try:
+                await query.edit_message_text(
+                    text=message_text + "\n\n❌ Нет информации для оплаты",
+                    parse_mode='Markdown',
+                    reply_markup=reply_markup
+                )
+            except telegram.error.BadRequest as e:
+                if "no text in the message to edit" in str(e).lower():
+                    await query.message.delete()
+                    await query.message.reply_text(
+                        text=message_text + "\n\n❌ Нет информации для оплаты",
+                        parse_mode='Markdown',
+                        reply_markup=reply_markup
+                    )
+                else:
+                    raise e
+    except Exception as e:
+        logger.error(f"Error displaying author cashless payment: {e}")
+        # Fallback to text only
+        fallback_text = message_text
+        if contact:
+            fallback_text += f"\n\n📞 Контакт для оплаты: {contact}"
+        else:
+            fallback_text += "\n\n❌ Нет информации для оплаты"
+        
+        try:
+            await query.edit_message_text(
+                text=fallback_text,
+                parse_mode='Markdown',
+                reply_markup=reply_markup
+            )
+        except telegram.error.BadRequest as e:
+            if "no text in the message to edit" in str(e).lower():
+                await query.message.delete()
+                await query.message.reply_text(
+                    text=fallback_text,
+                    parse_mode='Markdown',
+                    reply_markup=reply_markup
+                )
+            else:
+                raise e
+
+
+async def handle_author_cash_payment(query, context: ContextTypes.DEFAULT_TYPE, author_id: int) -> None:
+    """Handles cash payment for a specific author."""
+    cart = context.user_data.get('cart', [])
+    
+    # Get products for this specific author
+    author_products = [product for product in cart if product.get('AuthorID') == author_id]
+    
+    if not author_products:
+        await query.answer("❌ У этого автора нет товаров в корзине")
+        return
+    
+    # Get author details
+    authors = sheets_handler.get_authors()
+    author = None
+    for a in authors:
+        if a.get('AuthorID') == author_id:
+            author = a
+            break
+    
+    if not author:
+        await query.answer("❌ Автор не найден")
+        return
+    
+    author_name = author.get('Name', 'Неизвестный автор')
+    
+    # Calculate total for this author with promotions
+    total, promotion_discounts = calculate_cart_with_promotions(author_products)
+    
+    # Create cart summary for this author
+    cart_lines = [f"💵 *Оплата наличными*\n"]
+    cart_lines.append(f"👤 Автор: {author_name}")
+    cart_lines.append(f"💰 Сумма: {total} руб.\n")
+    
+    for product in author_products:
+        title = product.get('Title', 'Без названия')
+        price = product.get('Price', 0)
+        if product.get('IsLottery', False):
+            cart_lines.append(f"• 🎰 Лотерея: {title} - {price} руб.")
+        elif product.get('DiscountApplied', 0) > 0:
+            discount_amount = product.get('DiscountApplied', 0)
+            cart_lines.append(f"• {title} - {price} руб. (скидка {int(discount_amount)} руб.)")
+        else:
+            cart_lines.append(f"• {title} - {price} руб.")
+    
+    message_text = '\n'.join(cart_lines)
+    
+    keyboard = [
+        [InlineKeyboardButton("✅ Подтвердить оплату", callback_data=f'confirm_author_cash_{author_id}')],
+        [InlineKeyboardButton("⬅️ Назад к корзине", callback_data='view_cart')]
+    ]
+    reply_markup = InlineKeyboardMarkup(keyboard)
+    
+    try:
+        await query.edit_message_text(
+            text=message_text + "\n\n💵 Примите оплату наличными",
+            parse_mode='Markdown',
+            reply_markup=reply_markup
+        )
+    except telegram.error.BadRequest as e:
+        if "no text in the message to edit" in str(e).lower():
+            await query.message.delete()
+            await query.message.reply_text(
+                text=message_text + "\n\n💵 Примите оплату наличными",
+                parse_mode='Markdown',
+                reply_markup=reply_markup
+            )
+        else:
+            raise e
+
+
 def calculate_cart_with_promotions(cart):
     """Calculate cart total with '3 for the price of 2' promotion based on Google Sheets data."""
     if not cart:
         return 0, []
     
-    # Separate promotion products from regular products based on Promotion column
+    # Separate lottery products, promotion products, and regular products
+    lottery_products = []
     promotion_products = []
     regular_products = []
     
     for product in cart:
-        promotion_type = product.get('Promotion', '').strip().lower()
-        if promotion_type == '3for2':
-            promotion_products.append(product)
+        if product.get('IsLottery', False):
+            lottery_products.append(product)
         else:
-            regular_products.append(product)
+            promotion_type = product.get('Promotion', '').strip().lower()
+            if promotion_type == '3for2':
+                promotion_products.append(product)
+            else:
+                regular_products.append(product)
+    
+    # Calculate lottery products total (always their fixed price)
+    lottery_total = sum(product.get('Price', 0) for product in lottery_products)
     
     # Calculate regular products total (includes existing discount logic)
     regular_total = sum(product.get('Price', 0) for product in regular_products)
@@ -666,13 +1021,14 @@ def calculate_cart_with_promotions(cart):
                 # Incomplete group: pay full price
                 promotion_total += sum(p.get('Price', 0) for p in group)
     
-    total = regular_total + promotion_total
+    total = lottery_total + regular_total + promotion_total
     return total, promotion_discounts
 
 
 async def clear_cart(query, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """Clears the user's cart."""
+    """Clears the user's cart and payment state."""
     context.user_data['cart'] = []
+    context.user_data['author_payments'] = {}
     
     keyboard = [
         [InlineKeyboardButton("➕ Добавить книги", callback_data='select_author')],
@@ -751,6 +1107,119 @@ async def confirm_payment(query, context: ContextTypes.DEFAULT_TYPE, payment_met
         [InlineKeyboardButton("➕ Новая продажа", callback_data='select_author')],
         [InlineKeyboardButton("🏠 Главное меню", callback_data='back_to_main')]
     ]
+    reply_markup = InlineKeyboardMarkup(keyboard)
+    
+    # Try to edit message text, if it fails (media message), delete and send new message
+    try:
+        await query.edit_message_text(
+            result_message,
+            reply_markup=reply_markup
+        )
+    except telegram.error.BadRequest as e:
+        if "no text in the message to edit" in str(e).lower():
+            # Previous message was media, delete and send new text message
+            await query.message.delete()
+            await query.message.reply_text(
+                result_message,
+                reply_markup=reply_markup
+            )
+        else:
+            raise e
+
+
+async def confirm_author_payment(query, context: ContextTypes.DEFAULT_TYPE, author_id: int, payment_method: str) -> None:
+    """Confirms payment for a specific author and records transactions."""
+    cart = context.user_data.get('cart', [])
+    
+    # Get products for this specific author
+    author_products = [product for product in cart if product.get('AuthorID') == author_id]
+    
+    if not author_products:
+        await query.answer("❌ У этого автора нет товаров в корзине")
+        return
+    
+    # Get author details
+    authors = sheets_handler.get_authors()
+    author = None
+    for a in authors:
+        if a.get('AuthorID') == author_id:
+            author = a
+            break
+    
+    if not author:
+        await query.answer("❌ Автор не найден")
+        return
+    
+    author_name = author.get('Name', 'Неизвестный автор')
+    
+    # Calculate final prices with promotions for this author
+    total_amount, promotion_discounts = calculate_cart_with_promotions(author_products)
+    
+    # Create a map of promotion discounts for transaction recording
+    promo_discount_map = {}
+    for discount_info in promotion_discounts:
+        product_id = discount_info['product'].get('ProductID')
+        promo_discount_map[product_id] = discount_info
+    
+    # Record each product as a separate transaction
+    successful_transactions = 0
+    failed_transactions = 0
+    
+    for product in author_products:
+        product_id = product.get('ProductID')
+        
+        # Use promotion-adjusted price if applicable
+        if product_id in promo_discount_map:
+            # Product is free due to "3 for 2" promotion
+            price = 0
+        else:
+            # Use original price (which may already include monetary discounts)
+            price = product.get('Price', 0)
+        
+        success = sheets_handler.record_transaction(product_id, author_id, payment_method, price)
+        if success:
+            successful_transactions += 1
+        else:
+            failed_transactions += 1
+    
+    # Mark this author as paid
+    if 'author_payments' not in context.user_data:
+        context.user_data['author_payments'] = {}
+    context.user_data['author_payments'][str(author_id)] = True
+    
+    # Prepare result message
+    payment_emoji = "💳" if payment_method == "cashless" else "💵"
+    payment_text = "безналичная" if payment_method == "cashless" else "наличными"
+    
+    if failed_transactions == 0:
+        result_message = f"✅ Оплата для {author_name} успешно завершена!\n\n{payment_emoji} {payment_text.capitalize()}: {total_amount} руб.\n📝 Записано транзакций: {successful_transactions}"
+    else:
+        result_message = f"⚠️ Оплата для {author_name} завершена с ошибками!\n\n{payment_emoji} {payment_text.capitalize()}: {total_amount} руб.\n✅ Успешно: {successful_transactions}\n❌ Ошибок: {failed_transactions}"
+    
+    # Check if all authors are paid
+    all_authors_in_cart = set(product.get('AuthorID') for product in cart)
+    paid_authors = set(int(author_id) for author_id, is_paid in context.user_data.get('author_payments', {}).items() if is_paid)
+    
+    if all_authors_in_cart.issubset(paid_authors):
+        # All authors are paid, clear the cart and payments
+        context.user_data['cart'] = []
+        context.user_data['author_payments'] = {}
+        result_message += "\n\n🎉 Все авторы оплачены! Корзина очищена."
+        
+        keyboard = [
+            [InlineKeyboardButton("➕ Новая продажа", callback_data='select_author')],
+            [InlineKeyboardButton("🏠 Главное меню", callback_data='back_to_main')]
+        ]
+    else:
+        # Still have unpaid authors
+        remaining_authors = len(all_authors_in_cart - paid_authors)
+        result_message += f"\n\n📋 Осталось оплатить авторов: {remaining_authors}"
+        
+        keyboard = [
+            [InlineKeyboardButton("🛒 Вернуться к корзине", callback_data='view_cart')],
+            [InlineKeyboardButton("🏠 Главное меню", callback_data='back_to_main')]
+        ]
+    
     reply_markup = InlineKeyboardMarkup(keyboard)
     
     # Try to edit message text, if it fails (media message), delete and send new message
@@ -1025,6 +1494,7 @@ async def handle_back_to_main(query, context: ContextTypes.DEFAULT_TYPE) -> None
     keyboard = [
         [InlineKeyboardButton("Выбор по автору", callback_data='select_author')],
         [InlineKeyboardButton("Выбор по продукту", callback_data='select_product')],
+        [InlineKeyboardButton("🎰 Лотерея", callback_data='lottery')],
         [InlineKeyboardButton("Корзина", callback_data='view_cart')],
         [InlineKeyboardButton("Итоги", callback_data='view_totals')],
     ]
@@ -1047,6 +1517,97 @@ async def handle_back_to_main(query, context: ContextTypes.DEFAULT_TYPE) -> None
             await query.answer()
         else:
             raise e
+
+
+async def show_lottery_products(query, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Shows products eligible for lottery (where Lottery = Yes)."""
+    # Get lottery-eligible products
+    lottery_products = sheets_handler.get_lottery_products()
+    
+    if not lottery_products:
+        keyboard = [[InlineKeyboardButton("⬅️ Назад", callback_data='back_to_main')]]
+        reply_markup = InlineKeyboardMarkup(keyboard)
+        await query.edit_message_text("Нет товаров, доступных для лотереи.", reply_markup=reply_markup)
+        return
+    
+    keyboard = []
+    for product in lottery_products:
+        product_title = product.get('Title', 'Без названия')
+        product_id = product.get('ProductID')
+        # Truncate title if too long for button
+        if len(product_title) > 30:
+            product_title = product_title[:27] + "..."
+        keyboard.append([InlineKeyboardButton(product_title, callback_data=f'add_lottery_{product_id}')])
+    
+    # Add back button
+    keyboard.append([InlineKeyboardButton("⬅️ Назад", callback_data='back_to_main')])
+    
+    reply_markup = InlineKeyboardMarkup(keyboard)
+    
+    try:
+        await query.edit_message_text(
+            '🎰 Лотерея - выберите выигранный товар:\n\nЦена: 200 руб.',
+            reply_markup=reply_markup
+        )
+    except telegram.error.BadRequest as e:
+        if "no text in the message to edit" in str(e).lower():
+            await query.message.delete()
+            await query.message.reply_text(
+                '🎰 Лотерея - выберите выигранный товар:\n\nЦена: 200 руб.',
+                reply_markup=reply_markup
+            )
+        else:
+            raise e
+
+
+async def add_lottery_to_cart(query, context: ContextTypes.DEFAULT_TYPE, product_id: int) -> None:
+    """Adds a lottery product to the user's cart with fixed price of 200 rubles."""
+    if 'cart' not in context.user_data:
+        context.user_data['cart'] = []
+    
+    # Find the product details
+    all_products = sheets_handler.get_all_products()
+    product = None
+    for p in all_products:
+        if p.get('ProductID') == product_id:
+            product = p
+            break
+    
+    if product:
+        # Create a copy of the product with lottery-specific modifications
+        lottery_product = product.copy()
+        lottery_product['Price'] = 200  # Fixed lottery price
+        lottery_product['IsLottery'] = True  # Mark as lottery item
+        
+        context.user_data['cart'].append(lottery_product)
+        title = product.get('Title', 'Без названия')
+        
+        await query.answer(f"✅ 'Лотерея: {title}' добавлена в корзину!")
+        
+        # Show updated options
+        keyboard = [
+            [InlineKeyboardButton("🛒 Корзина", callback_data='view_cart')],
+            [InlineKeyboardButton("➕ Добавить еще", callback_data='select_author')],
+            [InlineKeyboardButton("🏠 Главное меню", callback_data='back_to_main')]
+        ]
+        reply_markup = InlineKeyboardMarkup(keyboard)
+        
+        try:
+            await query.edit_message_text(
+                f"✅ 'Лотерея: {title}' добавлена в корзину!\n\nЧто делаем дальше?",
+                reply_markup=reply_markup
+            )
+        except telegram.error.BadRequest as e:
+            if "no text in the message to edit" in str(e).lower():
+                await query.message.delete()
+                await query.message.reply_text(
+                    f"✅ 'Лотерея: {title}' добавлена в корзину!\n\nЧто делаем дальше?",
+                    reply_markup=reply_markup
+                )
+            else:
+                raise e
+    else:
+        await query.answer("❌ Ошибка при добавлении в корзину")
 
 
 # --- Main Bot Logic ---
