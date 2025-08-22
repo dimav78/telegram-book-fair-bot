@@ -33,7 +33,7 @@ def safe_message_text(text: str, max_length: int = 4000) -> str:
 
 
 async def safe_edit_message_text(query, text: str, reply_markup=None, parse_mode=None):
-    """Safely edit message text with error handling."""
+    """Safely edit message text with comprehensive error handling for all message types."""
     safe_text = safe_message_text(text)
     try:
         await query.edit_message_text(
@@ -43,18 +43,39 @@ async def safe_edit_message_text(query, text: str, reply_markup=None, parse_mode
         )
     except telegram.error.BadRequest as e:
         error_msg = str(e).lower()
-        if "no text in the message to edit" in error_msg or "message can't be edited" in error_msg:
-            await query.message.delete()
-            await query.message.reply_text(
-                text=safe_text,
-                reply_markup=reply_markup,
-                parse_mode=parse_mode
-            )
+        if ("no text in the message to edit" in error_msg or 
+            "message can't be edited" in error_msg or
+            "message to edit not found" in error_msg or
+            "bad request" in error_msg):
+            try:
+                # For media messages or other non-text messages, send a new message
+                await query.message.reply_text(
+                    text=safe_text,
+                    reply_markup=reply_markup,
+                    parse_mode=parse_mode
+                )
+            except Exception as reply_error:
+                # If reply fails, try sending to chat directly
+                logger.error(f"Reply failed, sending to chat: {reply_error}")
+                await query.message.chat.send_message(
+                    text=safe_text,
+                    reply_markup=reply_markup,
+                    parse_mode=parse_mode
+                )
         elif "message is not modified" in error_msg:
             await query.answer()
         else:
-            logger.error(f"Error editing message: {e}")
-            raise e
+            logger.error(f"Unexpected error editing message: {e}")
+            # Fallback: send new message
+            try:
+                await query.message.reply_text(
+                    text=safe_text,
+                    reply_markup=reply_markup,
+                    parse_mode=parse_mode
+                )
+            except Exception as fallback_error:
+                logger.error(f"Fallback message failed: {fallback_error}")
+                await query.answer("❌ Произошла ошибка при обновлении сообщения")
 
 
 # --- Command Handlers ---
@@ -172,14 +193,7 @@ async def show_product_types(query, context: ContextTypes.DEFAULT_TYPE) -> None:
     ]
     reply_markup = InlineKeyboardMarkup(keyboard)
     
-    try:
-        await query.edit_message_text('Выберите тип продукта:', reply_markup=reply_markup)
-    except telegram.error.BadRequest as e:
-        if "no text in the message to edit" in str(e).lower():
-            await query.message.delete()
-            await query.message.reply_text('Выберите тип продукта:', reply_markup=reply_markup)
-        else:
-            raise e
+    await safe_edit_message_text(query, 'Выберите тип продукта:', reply_markup=reply_markup)
 
 
 async def show_products_by_type(query, context: ContextTypes.DEFAULT_TYPE, product_type: str, page: int = 0) -> None:
@@ -191,7 +205,7 @@ async def show_products_by_type(query, context: ContextTypes.DEFAULT_TYPE, produ
     if not products:
         keyboard = [[InlineKeyboardButton("⬅️ К типам продуктов", callback_data='select_product')]]
         reply_markup = InlineKeyboardMarkup(keyboard)
-        await query.edit_message_text(f"Продукты типа '{product_type}' не найдены.", reply_markup=reply_markup)
+        await safe_edit_message_text(query, f"Продукты типа '{product_type}' не найдены.", reply_markup=reply_markup)
         return
     
     # Pagination settings
@@ -230,14 +244,7 @@ async def show_products_by_type(query, context: ContextTypes.DEFAULT_TYPE, produ
     showing_to = min(end_idx, total_products)
     message_text = f"📦 {product_type} ({showing_from}-{showing_to} из {total_products})\n\nВыберите продукт:"
     
-    try:
-        await query.edit_message_text(message_text, reply_markup=reply_markup)
-    except telegram.error.BadRequest as e:
-        if "no text in the message to edit" in str(e).lower():
-            await query.message.delete()
-            await query.message.reply_text(message_text, reply_markup=reply_markup)
-        else:
-            raise e
+    await safe_edit_message_text(query, message_text, reply_markup=reply_markup)
 
 
 async def show_authors(query, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -245,7 +252,7 @@ async def show_authors(query, context: ContextTypes.DEFAULT_TYPE) -> None:
     authors = sheets_handler.get_authors()
     
     if not authors:
-        await query.edit_message_text("Извините, не удалось загрузить список авторов.")
+        await safe_edit_message_text(query, "Извините, не удалось загрузить список авторов.")
         return
     
     keyboard = []
@@ -259,14 +266,7 @@ async def show_authors(query, context: ContextTypes.DEFAULT_TYPE) -> None:
     
     reply_markup = InlineKeyboardMarkup(keyboard)
     
-    try:
-        await query.edit_message_text('Выберите автора:', reply_markup=reply_markup)
-    except telegram.error.BadRequest as e:
-        if "no text in the message to edit" in str(e).lower():
-            await query.message.delete()
-            await query.message.reply_text('Выберите автора:', reply_markup=reply_markup)
-        else:
-            raise e
+    await safe_edit_message_text(query, 'Выберите автора:', reply_markup=reply_markup)
 
 
 async def show_products_by_author(query, context: ContextTypes.DEFAULT_TYPE, author_id: int) -> None:
@@ -276,7 +276,7 @@ async def show_products_by_author(query, context: ContextTypes.DEFAULT_TYPE, aut
     if not products:
         keyboard = [[InlineKeyboardButton("⬅️ К авторам", callback_data='select_author')]]
         reply_markup = InlineKeyboardMarkup(keyboard)
-        await query.edit_message_text("У этого автора пока нет доступных книг.", reply_markup=reply_markup)
+        await safe_edit_message_text(query, "У этого автора пока нет доступных книг.", reply_markup=reply_markup)
         return
     
     keyboard = []
@@ -290,14 +290,7 @@ async def show_products_by_author(query, context: ContextTypes.DEFAULT_TYPE, aut
     
     reply_markup = InlineKeyboardMarkup(keyboard)
     
-    try:
-        await query.edit_message_text('Выберите книгу:', reply_markup=reply_markup)
-    except telegram.error.BadRequest as e:
-        if "no text in the message to edit" in str(e).lower():
-            await query.message.delete()
-            await query.message.reply_text('Выберите книгу:', reply_markup=reply_markup)
-        else:
-            raise e
+    await safe_edit_message_text(query, 'Выберите книгу:', reply_markup=reply_markup)
 
 
 async def show_product_details(query, context: ContextTypes.DEFAULT_TYPE, product_id: int) -> None:
@@ -318,7 +311,7 @@ async def show_product_details(query, context: ContextTypes.DEFAULT_TYPE, produc
             break
     
     if not product:
-        await query.edit_message_text("Книга не найдена.")
+        await safe_edit_message_text(query, "Книга не найдена.")
         return
     
     title = product.get('Title', 'Без названия')
@@ -380,7 +373,7 @@ async def show_lottery_product_details(query, context: ContextTypes.DEFAULT_TYPE
             break
     
     if not product:
-        await query.edit_message_text("Товар не найден.")
+        await safe_edit_message_text(query, "Товар не найден.")
         return
     
     title = product.get('Title', 'Без названия')
@@ -628,7 +621,7 @@ async def handle_cashless_payment(query, context: ContextTypes.DEFAULT_TYPE) -> 
             break
     
     if not author:
-        await query.edit_message_text("❌ Ошибка: автор не найден")
+        await safe_edit_message_text(query, "❌ Ошибка: автор не найден")
         return
     
     qr_code_url = str(author.get('QR_Code_URL', '')).strip()
@@ -1611,7 +1604,7 @@ async def show_lottery_authors(query, context: ContextTypes.DEFAULT_TYPE) -> Non
     if not lottery_products:
         keyboard = [[InlineKeyboardButton("⬅️ Назад", callback_data='back_to_main')]]
         reply_markup = InlineKeyboardMarkup(keyboard)
-        await query.edit_message_text("Нет товаров, доступных для лотереи.", reply_markup=reply_markup)
+        await safe_edit_message_text(query, "Нет товаров, доступных для лотереи.", reply_markup=reply_markup)
         return
     
     # Get unique author IDs from lottery products
@@ -1624,7 +1617,7 @@ async def show_lottery_authors(query, context: ContextTypes.DEFAULT_TYPE) -> Non
     if not lottery_authors:
         keyboard = [[InlineKeyboardButton("⬅️ Назад", callback_data='back_to_main')]]
         reply_markup = InlineKeyboardMarkup(keyboard)
-        await query.edit_message_text("Нет авторов с товарами для лотереи.", reply_markup=reply_markup)
+        await safe_edit_message_text(query, "Нет авторов с товарами для лотереи.", reply_markup=reply_markup)
         return
     
     keyboard = []
@@ -1665,7 +1658,7 @@ async def show_lottery_products_by_author(query, context: ContextTypes.DEFAULT_T
     if not author_lottery_products:
         keyboard = [[InlineKeyboardButton("⬅️ К авторам лотереи", callback_data='lottery')]]
         reply_markup = InlineKeyboardMarkup(keyboard)
-        await query.edit_message_text("У этого автора нет товаров для лотереи.", reply_markup=reply_markup)
+        await safe_edit_message_text(query, "У этого автора нет товаров для лотереи.", reply_markup=reply_markup)
         return
     
     # Get author name
