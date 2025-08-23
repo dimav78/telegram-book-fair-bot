@@ -1637,7 +1637,11 @@ async def show_lottery_authors(query, context: ContextTypes.DEFAULT_TYPE) -> Non
             reply_markup=reply_markup
         )
     except telegram.error.BadRequest as e:
-        if "no text in the message to edit" in str(e).lower():
+        error_msg = str(e).lower()
+        if "message is not modified" in error_msg:
+            # Message content is identical - ignore this error
+            logger.info("Ignoring 'message is not modified' error in show_lottery_authors")
+        elif "no text in the message to edit" in error_msg:
             await query.message.delete()
             await query.message.reply_text(
                 '🎰 Лотерея - выберите автора:\n\nЦена: 200 руб.',
@@ -1750,6 +1754,22 @@ async def add_lottery_to_cart(query, context: ContextTypes.DEFAULT_TYPE, product
 
 
 # --- Main Bot Logic ---
+async def error_handler(update: object, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Log errors and handle common Telegram exceptions gracefully."""
+    logger.error(f"Exception while handling an update: {context.error}")
+    
+    # Handle specific Telegram errors
+    if isinstance(context.error, telegram.error.BadRequest):
+        error_msg = str(context.error).lower()
+        if "message is not modified" in error_msg:
+            # Message content is identical to current content - ignore this error
+            logger.info("Ignoring 'message is not modified' error - content is identical")
+            return
+        elif "message can't be edited" in error_msg or "message to edit not found" in error_msg:
+            logger.info("Message editing failed - message may have been deleted or is too old")
+            return
+
+
 def main() -> None:
     """Start the bot."""
     # Create the Application and pass it your bot's token.
@@ -1764,6 +1784,9 @@ def main() -> None:
     
     # Register the callback query handler for button presses
     application.add_handler(CallbackQueryHandler(button_handler))
+    
+    # Add error handler
+    application.add_error_handler(error_handler)
 
     # Start the Bot
     print("Bot is running...")
